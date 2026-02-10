@@ -1,39 +1,9 @@
 {
-  "$schema": "https://json.schemastore.org/claude-code-settings.json",
   "hooks": {
-    "UserPromptSubmit": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/hooks/opik-logger.sh\""
-          }
-        ],
-        "description": "Create Opik trace for new user prompt"
-      }
-    ],
-    "PostToolUse": [
-      {
-        "matcher": "*",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/hooks/opik-logger.sh\""
-          }
-        ],
-        "description": "Log tool call as Opik span"
-      }
-    ],
-    "Stop": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/hooks/opik-logger.sh\""
-          }
-        ],
-        "description": "Finalize Opik trace and cleanup"
-      }
-    ]
+    "UserPromptSubmit": [{"hooks": [{"type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/hooks/opik-logger.sh\""}]}],
+    "PostToolUse": [{"hooks": [{"type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/hooks/opik-logger.sh\""}]}],
+    "SubagentStop": [{"hooks": [{"type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/hooks/opik-logger.sh\""}]}],
+    "PreCompact": [{"hooks": [{"type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/hooks/opik-logger.sh\""}]}],
+    "Stop": [{"hooks": [{"type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/hooks/opik-logger.sh\""}]}]
   }
 }
