@@ -20,6 +20,7 @@ type TranscriptEntry struct {
 type Message struct {
 	Content []Content `json:"content"`
 	Usage   *Usage    `json:"usage,omitempty"`
+	Model   string    `json:"model,omitempty"`
 }
 
 // Content represents a content block in a message
@@ -32,6 +33,7 @@ type Content struct {
 	Input     map[string]interface{} `json:"input,omitempty"`
 	ToolUseID string                 `json:"tool_use_id,omitempty"`
 	Content   interface{}            `json:"content,omitempty"`
+	IsError   bool                   `json:"is_error,omitempty"`
 }
 
 // Usage represents token usage
@@ -59,6 +61,14 @@ type ParsedEntry struct {
 	ContentType string
 	Content     Content
 	Usage       *Usage
+	Model       string
+}
+
+// ToolResultInfo holds tool result data including error info and timestamp
+type ToolResultInfo struct {
+	Result    string
+	IsError   bool
+	Timestamp string
 }
 
 // ReadTranscript reads and parses a transcript file from a given line offset
@@ -108,9 +118,9 @@ func ReadTranscriptReverse(path string) ([]TranscriptEntry, error) {
 	return entries, nil
 }
 
-// BuildToolResults builds a map of tool_use_id -> result content from user messages
-func BuildToolResults(entries []TranscriptEntry) map[string]string {
-	results := make(map[string]string)
+// BuildToolResults builds a map of tool_use_id -> ToolResultInfo from user messages
+func BuildToolResults(entries []TranscriptEntry) map[string]*ToolResultInfo {
+	results := make(map[string]*ToolResultInfo)
 
 	for _, entry := range entries {
 		if entry.Type != "user" || entry.Message == nil || len(entry.Message.Content) == 0 {
@@ -119,9 +129,14 @@ func BuildToolResults(entries []TranscriptEntry) map[string]string {
 
 		content := entry.Message.Content[0]
 		if content.Type == "tool_result" && content.ToolUseID != "" {
-			if str, ok := content.Content.(string); ok {
-				results[content.ToolUseID] = str
+			info := &ToolResultInfo{
+				IsError:   content.IsError,
+				Timestamp: entry.Timestamp,
 			}
+			if str, ok := content.Content.(string); ok {
+				info.Result = str
+			}
+			results[content.ToolUseID] = info
 		}
 	}
 
@@ -164,8 +179,19 @@ func ParseAssistantMessages(entries []TranscriptEntry) []ParsedEntry {
 			ContentType: content.Type,
 			Content:     content,
 			Usage:       entry.Message.Usage,
+			Model:       entry.Message.Model,
 		})
 	}
 
 	return parsed
+}
+
+// FindModel extracts the model name from transcript entries
+func FindModel(entries []TranscriptEntry) string {
+	for _, entry := range entries {
+		if entry.Type == "assistant" && entry.Message != nil && entry.Message.Model != "" {
+			return entry.Message.Model
+		}
+	}
+	return ""
 }

@@ -53,6 +53,55 @@ export OPIK_CC_DEBUG="true"                 # Enable debug logging
 export OPIK_CC_TRUNCATE_FIELDS="false"      # Don't truncate large fields
 ```
 
+### External Trace Linking
+
+Link Claude Code sessions to existing Opik traces (useful for embedding Claude Code in larger workflows):
+
+```bash
+export OPIK_CC_PARENT_TRACE_ID="your-trace-id"  # Attach to existing trace
+export OPIK_CC_ROOT_SPAN_ID="your-span-id"      # Set parent span for all Claude Code spans
+```
+
+## MCP Server Setup
+
+The [Opik MCP server](https://github.com/comet-ml/opik-mcp) provides Claude with tools to interact with your Opik data - query traces, analyze experiments, and access evaluation results directly in conversation.
+
+### For Opik Cloud
+
+Add to your `~/.claude.json`:
+
+```json
+{
+  "mcpServers": {
+    "opik": {
+      "command": "npx",
+      "args": ["-y", "opik-mcp", "--apiKey", "YOUR_OPIK_API_KEY"]
+    }
+  }
+}
+```
+
+Replace `YOUR_OPIK_API_KEY` with your API key from [comet.com](https://www.comet.com).
+
+### For Self-Hosted Opik
+
+```json
+{
+  "mcpServers": {
+    "opik": {
+      "command": "npx",
+      "args": ["-y", "opik-mcp", "--apiBaseUrl", "http://localhost:5173/api"]
+    }
+  }
+}
+```
+
+Adjust the `apiBaseUrl` to match your Opik instance.
+
+### Pre-configured Templates
+
+Copy-ready configurations are available in `mcp-configs/mcp-servers.json`.
+
 ## Commands
 
 ### `/opik` - Control Tracing
@@ -111,8 +160,10 @@ opik-claude-plugin/
 │   └── agent-ops/          # Observability skill + references
 ├── agents/
 │   └── agent-reviewer.md   # Agent review agent
-└── commands/
-    └── opik.md             # /opik command
+├── commands/
+│   └── opik.md             # /opik command
+└── mcp-configs/
+    └── mcp-servers.json    # MCP server configurations
 ```
 
 ## Building from Source

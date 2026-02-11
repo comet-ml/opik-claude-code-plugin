@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -79,7 +80,11 @@ func main() {
 }
 
 func onPrompt() {
-	traceID := uuid7()
+	// Use parent trace ID if provided via env var, otherwise generate new
+	traceID := config.ParentTraceID
+	if traceID == "" {
+		traceID = uuid7()
+	}
 	ts := isoNow()
 
 	startLine := 0
@@ -99,19 +104,22 @@ func onPrompt() {
 		debugLog("save state: %v", err)
 	}
 
-	debugLog("trace=%s start=%d", traceID, startLine)
+	debugLog("trace=%s start=%d parent=%s", traceID, startLine, config.ParentTraceID)
 
-	trace := Trace{
-		ID:          traceID,
-		Name:        "claude-code",
-		StartTime:   ts,
-		ProjectName: config.Project,
-		ThreadID:    input.SessionID,
-		Tags:        []string{"claude-code"},
-		Input:       map[string]string{"text": input.Prompt},
-	}
-	if err := api.Post("/traces", trace); err != nil {
-		debugLog("create trace: %v", err)
+	// Only create new trace if not using parent trace
+	if config.ParentTraceID == "" {
+		trace := Trace{
+			ID:          traceID,
+			Name:        "claude-code",
+			StartTime:   ts,
+			ProjectName: config.Project,
+			ThreadID:    input.SessionID,
+			Tags:        []string{"claude-code"},
+			Input:       map[string]string{"text": input.Prompt},
+		}
+		if err := api.Post("/traces", trace); err != nil {
+			debugLog("create trace: %v", err)
+		}
 	}
 }
 
@@ -265,17 +273,29 @@ func flush(state *State) {
 		return
 	}
 
-	// Update trace name with slug if not already sent
+	// Update trace metadata (name and model) if not already sent
 	if !state.SlugSent {
+		updates := map[string]interface{}{
+			"project_name": config.Project,
+		}
+
 		if slug := findSlug(entries); slug != "" {
-			if err := api.Patch("/traces/"+state.TraceID, map[string]interface{}{
-				"project_name": config.Project,
-				"name":         slug,
-			}); err != nil {
-				debugLog("update trace name: %v", err)
+			updates["name"] = slug
+		}
+
+		// Only update model for traces we own (not parent traces)
+		if config.ParentTraceID == "" {
+			if model := FindModel(entries); model != "" {
+				updates["model"] = model
+			}
+		}
+
+		if len(updates) > 1 { // More than just project_name
+			if err := api.Patch("/traces/"+state.TraceID, updates); err != nil {
+				debugLog("update trace: %v", err)
 			} else {
 				state.SlugSent = true
-				debugLog("set trace name: %s", slug)
+				debugLog("updated trace metadata")
 			}
 		}
 	}
@@ -313,17 +333,36 @@ func processTranscriptEntries(traceID string, entries []TranscriptEntry, parentS
 	taskResults := BuildTaskResults(entries)
 	parsed := ParseAssistantMessages(entries)
 
+	// Use root span ID from config if provided and no explicit parent
+	effectiveParentSpanID := parentSpanID
+	if effectiveParentSpanID == "" && config.RootSpanID != "" {
+		effectiveParentSpanID = config.RootSpanID
+	}
+
 	spans := make([]Span, 0, len(parsed))
-	for _, p := range parsed {
+	for i, p := range parsed {
+		// Calculate end time: use next entry's timestamp if available
+		endTime := p.Timestamp
+		if i+1 < len(parsed) {
+			endTime = parsed[i+1].Timestamp
+		}
+
+		// For tool_use, try to get end time from tool result
+		if p.ContentType == "tool_use" {
+			if result, ok := toolResults[p.Content.ID]; ok && result != nil && result.Timestamp != "" {
+				endTime = result.Timestamp
+			}
+		}
+
 		span := Span{
 			ID:          toV7(p.UUID),
 			TraceID:     traceID,
 			StartTime:   p.Timestamp,
-			EndTime:     p.Timestamp,
+			EndTime:     endTime,
 			ProjectName: config.Project,
 		}
-		if parentSpanID != "" {
-			span.ParentSpanID = parentSpanID
+		if effectiveParentSpanID != "" {
+			span.ParentSpanID = effectiveParentSpanID
 		}
 
 		switch p.ContentType {
@@ -349,7 +388,7 @@ func processTranscriptEntries(traceID string, entries []TranscriptEntry, parentS
 			span.Output = map[string]interface{}{"text": p.Content.Text}
 
 		case "tool_use":
-			span.Name, span.Type, span.Input, span.Output, span.Usage = processToolUse(p, toolResults, taskResults)
+			span.Name, span.Type, span.Input, span.Output, span.Usage, span.Error = processToolUse(p, toolResults, taskResults)
 
 		default:
 			continue
@@ -361,7 +400,7 @@ func processTranscriptEntries(traceID string, entries []TranscriptEntry, parentS
 	return spans
 }
 
-func processToolUse(p ParsedEntry, toolResults map[string]string, taskResults map[string]*ToolUseResult) (name, typ string, input, output map[string]interface{}, usage map[string]int) {
+func processToolUse(p ParsedEntry, toolResults map[string]*ToolResultInfo, taskResults map[string]*ToolUseResult) (name, typ string, input, output map[string]interface{}, usage map[string]int, spanErr *SpanError) {
 	name = p.Content.Name
 	if name == "" {
 		name = "Tool"
@@ -420,14 +459,60 @@ func processToolUse(p ParsedEntry, toolResults map[string]string, taskResults ma
 		}
 
 	default:
-		if result, ok := toolResults[toolID]; ok {
-			output = map[string]interface{}{"result": result}
+		if result, ok := toolResults[toolID]; ok && result != nil {
+			output = map[string]interface{}{"result": result.Result}
+
+			// Check if tool result indicates an error
+			if result.IsError {
+				spanErr = categorizeError(result.Result)
+			}
 		} else {
 			output = map[string]interface{}{}
 		}
 	}
 
-	return name, typ, input, output, usage
+	return name, typ, input, output, usage, spanErr
+}
+
+// categorizeError analyzes error messages and returns categorized error info
+func categorizeError(errMsg string) *SpanError {
+	errType := "tool_error"
+
+	// Categorize based on common error patterns
+	switch {
+	case containsAny(errMsg, "timeout", "timed out", "deadline exceeded"):
+		errType = "timeout"
+	case containsAny(errMsg, "permission denied", "access denied", "forbidden", "not authorized"):
+		errType = "permission_denied"
+	case containsAny(errMsg, "not found", "no such file", "does not exist", "ENOENT"):
+		errType = "not_found"
+	case containsAny(errMsg, "connection refused", "network error", "unreachable"):
+		errType = "network_error"
+	}
+
+	return &SpanError{
+		Type:    errType,
+		Message: truncateString(errMsg, 500),
+	}
+}
+
+// containsAny checks if s contains any of the substrings (case-insensitive)
+func containsAny(s string, substrs ...string) bool {
+	lower := strings.ToLower(s)
+	for _, sub := range substrs {
+		if strings.Contains(lower, strings.ToLower(sub)) {
+			return true
+		}
+	}
+	return false
+}
+
+// truncateString truncates a string to maxLen characters
+func truncateString(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
 }
 
 func getLastOutput(state *State) string {

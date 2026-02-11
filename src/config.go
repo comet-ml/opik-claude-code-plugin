@@ -8,13 +8,15 @@ import (
 )
 
 type Config struct {
-	URL       string
-	Project   string
-	APIKey    string
-	Workspace string
-	Debug     bool
-	Truncate  bool
-	Enabled   bool
+	URL           string
+	Project       string
+	APIKey        string
+	Workspace     string
+	Debug         bool
+	Truncate      bool
+	Enabled       bool
+	ParentTraceID string
+	RootSpanID    string
 }
 
 const truncateMsg = "[ TRUNCATED -- set OPIK_CC_TRUNCATE_FIELDS=false ]"
@@ -34,13 +36,15 @@ func LoadConfig() (*Config, error) {
 	}
 
 	cfg := &Config{
-		URL:       strings.TrimSuffix(url, "/") + "/v1/private",
-		Project:   "claude-code",
-		APIKey:    getEnvOrConfig("OPIK_API_KEY", fileConfig, "api_key"),
-		Workspace: getEnvOrConfig("OPIK_WORKSPACE", fileConfig, "workspace"),
-		Debug:     os.Getenv("OPIK_CC_DEBUG") == "true",
-		Truncate:  os.Getenv("OPIK_CC_TRUNCATE_FIELDS") != "false",
-		Enabled:   isTracingEnabled(),
+		URL:           strings.TrimSuffix(url, "/") + "/v1/private",
+		Project:       "claude-code",
+		APIKey:        getEnvOrConfig("OPIK_API_KEY", fileConfig, "api_key"),
+		Workspace:     getEnvOrConfig("OPIK_WORKSPACE", fileConfig, "workspace"),
+		Debug:         os.Getenv("OPIK_CC_DEBUG") == "true",
+		Truncate:      os.Getenv("OPIK_CC_TRUNCATE_FIELDS") != "false",
+		Enabled:       isTracingEnabled(),
+		ParentTraceID: os.Getenv("OPIK_CC_PARENT_TRACE_ID"),
+		RootSpanID:    os.Getenv("OPIK_CC_ROOT_SPAN_ID"),
 	}
 
 	if proj := getEnvOrConfig("OPIK_CC_PROJECT", fileConfig, "project_name"); proj != "" {

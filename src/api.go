@@ -74,6 +74,7 @@ type Trace struct {
 	Tags        []string          `json:"tags,omitempty"`
 	Input       map[string]string `json:"input,omitempty"`
 	Output      map[string]string `json:"output,omitempty"`
+	Model       string            `json:"model,omitempty"`
 }
 
 // Span represents an Opik span
@@ -89,6 +90,13 @@ type Span struct {
 	Input        map[string]interface{} `json:"input"`
 	Output       map[string]interface{} `json:"output"`
 	Usage        map[string]int         `json:"usage,omitempty"`
+	Error        *SpanError             `json:"error,omitempty"`
+}
+
+// SpanError represents error information for a span
+type SpanError struct {
+	Type    string `json:"type"`
+	Message string `json:"message"`
 }
 
 // SpanBatch wraps spans for batch API calls

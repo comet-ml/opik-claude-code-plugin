@@ -1,0 +1,20 @@
+{
+  "mcpServers": {
+    "opik": {
+      "command": "npx",
+      "args": ["-y", "opik-mcp", "--apiKey", "YOUR_OPIK_API_KEY_HERE"],
+      "description": "Opik LLM observability - tracing, evaluation, and experiment tracking"
+    },
+    "opik-local": {
+      "command": "npx",
+      "args": ["-y", "opik-mcp", "--apiBaseUrl", "http://localhost:5173/api"],
+      "description": "Opik LLM observability - self-hosted/local instance"
+    }
+  },
+  "_comments": {
+    "usage": "Copy the opik server config to your ~/.claude.json mcpServers section",
+    "cloud": "Use 'opik' config with your API key from comet.com for Opik Cloud",
+    "self_hosted": "Use 'opik-local' config for self-hosted Opik (adjust apiBaseUrl as needed)",
+    "docs": "See https://github.com/comet-ml/opik-mcp for setup instructions"
+  }
+}
