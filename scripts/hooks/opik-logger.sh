@@ -1,238 +1,256 @@
 #!/usr/bin/env bash
 #
-# Opik Logger - Claude Code Hook Handler
+# opik-logger.sh — Claude Code → Opik observability bridge
 #
-# Logs Claude Code sessions to Opik for LLM observability.
-# Each conversation turn becomes a trace; each tool call becomes a span.
+# Captures Claude Code sessions as Opik traces with spans for thinking,
+# text responses, tool calls, and subagents. Uses idempotent upserts
+# via deterministic UUIDs derived from transcript entries.
 #
-# Configuration (env vars > ~/.opik.config > defaults):
-#   OPIK_BASE_URL              - Opik API base URL (required)
-#   OPIK_API_KEY               - API key for Opik Cloud
-#   OPIK_WORKSPACE             - Workspace for Opik Cloud
-#   OPIK_PROJECT               - Project name (default: claude-code)
-#   OPIK_CC_DEBUG              - Enable debug logging (default: false)
-#   OPIK_CC_TRUNCATE_CONTENT   - Truncate long content (default: true)
-#   OPIK_CC_FLUSH_INTERVAL     - Seconds between flushes (default: 5)
+# Configuration (env vars override ~/.opik.config):
+#   OPIK_BASE_URL          — Opik API base URL (required)
+#   OPIK_PROJECT           — Project name (default: claude-code)
+#   OPIK_API_KEY           — API key for Opik Cloud
+#   OPIK_WORKSPACE         — Workspace for Opik Cloud
+#   OPIK_CC_DEBUG          — Enable debug logging (default: false)
+#   OPIK_CC_TRUNCATE_FIELDS — Mask long fields in Edit/Read/Write (default: true)
 #
-
-set -uo pipefail
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Configuration
-# ─────────────────────────────────────────────────────────────────────────────
-
-read_config() {
-    local key=$1 config="$HOME/.opik.config"
-    [[ -f "$config" ]] && grep -E "^${key}\s*=" "$config" 2>/dev/null | head -1 | sed 's/^[^=]*=\s*//' | tr -d ' '
-}
-
-# Load config: env vars take precedence over ~/.opik.config
-_base_url="${OPIK_BASE_URL:-$(read_config url_override)}"
-_base_url="${_base_url%/}"  # Strip trailing slash
-
-[[ -z "$_base_url" ]] && { echo "Error: OPIK_BASE_URL or url_override in ~/.opik.config required" >&2; exit 1; }
-declare -r OPIK_URL="${_base_url}/v1/private"
-_project="${OPIK_PROJECT:-$(read_config project_name)}"
-declare -r OPIK_PROJECT="${_project:-claude-code}"
-declare -r OPIK_API_KEY="${OPIK_API_KEY:-$(read_config api_key)}"
-declare -r OPIK_WORKSPACE="${OPIK_WORKSPACE:-$(read_config workspace)}"
-
-declare -r DEBUG="${OPIK_CC_DEBUG:-false}"
-declare -r TRUNCATE="${OPIK_CC_TRUNCATE_CONTENT:-true}"
-declare -r FLUSH_INTERVAL="${OPIK_CC_FLUSH_INTERVAL:-5}"
-
-# Validate cloud config
-if [[ -z "$OPIK_API_KEY" && "$OPIK_URL" =~ (cloud\.opik|comet) ]]; then
-    echo "Error: OPIK_API_KEY required for Opik Cloud" >&2
-    exit 1
-fi
+set -u
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Debug & Dependencies
+# Config
 # ─────────────────────────────────────────────────────────────────────────────
 
-declare -r DEBUG_LOG="/tmp/opik-hook-debug.log"
-debug() { [[ "$DEBUG" == "true" ]] && echo "[$(date '+%H:%M:%S')] $*" >> "$DEBUG_LOG"; }
+cfg() { [[ -f ~/.opik.config ]] && sed -n "s/^$1 *= *//p" ~/.opik.config | head -1 | tr -d ' '; }
 
-command -v jq &>/dev/null || { echo "Error: jq required" >&2; exit 1; }
-command -v curl &>/dev/null || { echo "Error: curl required" >&2; exit 1; }
+URL="${OPIK_BASE_URL:-$(cfg url_override)}"
+[[ -z "$URL" ]] && exit 0
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Parse Hook Input
-# ─────────────────────────────────────────────────────────────────────────────
+readonly URL="${URL%/}/v1/private"
+_proj="${OPIK_PROJECT:-$(cfg project_name)}"
+readonly PROJECT="${_proj:-claude-code}"
+readonly API_KEY="${OPIK_API_KEY:-$(cfg api_key)}"
+readonly WORKSPACE="${OPIK_WORKSPACE:-$(cfg workspace)}"
+readonly DEBUG="${OPIK_CC_DEBUG:-false}"
+readonly TRUNCATE="${OPIK_CC_TRUNCATE_FIELDS:-true}"
+readonly TRUNC_MSG='[ TRUNCATED -- set OPIK_CC_TRUNCATE_FIELDS=false ]'
 
-declare -r INPUT=$(cat)
-declare -r EVENT=$(jq -r '.hook_event_name // ""' <<< "$INPUT")
-declare -r SESSION=$(jq -r '.session_id // ""' <<< "$INPUT")
-declare -r TRANSCRIPT=$(jq -r '.transcript_path // ""' <<< "$INPUT")
-
-declare -r STATE_FILE="/tmp/opik-${SESSION}.json"
-declare -r BUFFER_FILE="/tmp/opik-${SESSION}-spans.jsonl"
-declare -r LOCK_FILE="/tmp/opik-${SESSION}.lock"
-
-debug "=== $EVENT ==="
+command -v jq &>/dev/null || exit 0
+command -v curl &>/dev/null || exit 0
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Utilities
 # ─────────────────────────────────────────────────────────────────────────────
 
+log() {
+    [[ "$DEBUG" != "true" ]] && return
+    local f="/tmp/opik-debug.log"
+    # Rotate if > 10000 lines
+    if [[ -f "$f" ]] && (( $(wc -l < "$f") > 10000 )); then
+        tail -1000 "$f" > "${f}.tmp" && mv "${f}.tmp" "$f"
+    fi
+    echo "[$(date +%H:%M:%S)] $*" >> "$f"
+}
+
 uuid7() {
-    local ts=$(($(date +%s) * 1000 + RANDOM % 1000))
-    local hex=$(printf '%012x' "$ts")
-    local rand=$(od -An -tx1 -N10 /dev/urandom | tr -d ' \n')
-    local var=$(printf '%02x' $(( 0x${rand:3:2} & 0x3F | 0x80 )))
+    local ts hex rand var
+    ts=$(($(date +%s) * 1000 + RANDOM % 1000))
+    hex=$(printf '%012x' "$ts")
+    rand=$(od -An -tx1 -N10 /dev/urandom | tr -d ' \n')
+    var=$(printf '%02x' $((0x${rand:3:2} & 0x3F | 0x80)))
     echo "${hex:0:8}-${hex:8:4}-7${rand:0:3}-${var}${rand:5:2}-${rand:7:12}"
 }
 
-now_iso() { date -u +"%Y-%m-%dT%H:%M:%SZ"; }
-now_unix() { date +%s; }
+# Cross-platform md5 (macOS: md5, Linux: md5sum)
+md5hash() { command -v md5sum &>/dev/null && md5sum | cut -d' ' -f1 || md5; }
 
-jval() { jq -r "${2} // \"${3:-}\"" <<< "$1"; }
-jobj() { jq -c "${2} // ${3:-null}" <<< "$1"; }
+# Cross-platform reverse file (macOS: tail -r, Linux: tac)
+reverse_file() { command -v tac &>/dev/null && tac "$1" 2>/dev/null || tail -r "$1" 2>/dev/null; }
 
-json_usage() {
-    jq -nc --argjson i "${1:-0}" --argjson o "${2:-0}" \
-        '{prompt_tokens:$i, completion_tokens:$o, total_tokens:($i+$o)}'
+# Deterministic UUIDv7 from any UUID (for idempotent upserts)
+to_v7() {
+    local h b6 b8
+    h=$(echo -n "$1" | md5hash | tr -d ' \n-')
+    b6=$(printf '%02x' $((0x${h:12:2} & 0x0F | 0x70)))
+    b8=$(printf '%02x' $((0x${h:16:2} & 0x3F | 0x80)))
+    echo "${h:0:8}-${h:8:4}-${b6}${h:14:2}-${b8}${h:18:2}-${h:20:12}"
 }
 
-truncate() {
-    local json="$1"
-    [[ "$TRUNCATE" != "true" ]] && { echo "$json"; return; }
-    jq -c 'walk(if type == "string" and length > 100 then
-        "[TRUNCATED - set OPIK_CC_TRUNCATE_CONTENT=false]"
-    else . end)' <<< "$json" 2>/dev/null || echo "$json"
+# ISO8601 with milliseconds (uses perl for cross-platform ms precision)
+iso() {
+    if command -v perl &>/dev/null; then
+        perl -MTime::HiRes=gettimeofday -MPOSIX=strftime -e \
+            'my($s,$us)=gettimeofday;print strftime("%Y-%m-%dT%H:%M:%S",gmtime($s)).sprintf(".%03dZ",$us/1000)'
+    else
+        date -u +%Y-%m-%dT%H:%M:%SZ
+    fi
 }
-
-state_read() { [[ -f "$STATE_FILE" ]] && cat "$STATE_FILE" || echo ""; }
-
-# ─────────────────────────────────────────────────────────────────────────────
-# API Client
-# ─────────────────────────────────────────────────────────────────────────────
+jv() { jq -r "$2 // \"${3:-}\"" <<< "$1"; }
 
 api() {
     local method=$1 endpoint=$2 data=$3 async=${4:-false}
-    local -a headers=(-H "Content-Type: application/json")
-    [[ -n "$OPIK_API_KEY" ]] && headers+=(-H "authorization: $OPIK_API_KEY")
-    [[ -n "$OPIK_WORKSPACE" ]] && headers+=(-H "Comet-Workspace: $OPIK_WORKSPACE")
+    local -a h=(-H "Content-Type: application/json")
+    [[ -n "$API_KEY" ]] && h+=(-H "authorization: $API_KEY")
+    [[ -n "$WORKSPACE" ]] && h+=(-H "Comet-Workspace: $WORKSPACE")
 
     if [[ "$async" == "true" ]]; then
-        (curl -sS -X "$method" "${OPIK_URL}${endpoint}" "${headers[@]}" -d "$data" &>/dev/null) &
+        (curl -sS -X "$method" "${URL}${endpoint}" "${h[@]}" -d "$data" &>/dev/null) &
         disown 2>/dev/null
+    elif [[ "$DEBUG" == "true" ]]; then
+        local out code
+        out=$(curl -sS -w "\n%{http_code}" -X "$method" "${URL}${endpoint}" "${h[@]}" -d "$data" 2>&1)
+        code=$(tail -1 <<< "$out")
+        [[ "$code" != 2* ]] && log "API $method $endpoint failed ($code): $(head -n -1 <<< "$out")"
     else
-        curl -sS -X "$method" "${OPIK_URL}${endpoint}" "${headers[@]}" -d "$data" 2>/dev/null
+        curl -sS -X "$method" "${URL}${endpoint}" "${h[@]}" -d "$data" &>/dev/null
     fi
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Buffer & Flush
+# Input & State
 # ─────────────────────────────────────────────────────────────────────────────
 
-buffer() { [[ -n "$1" && "$1" != "jq:"* ]] && echo "$1" >> "$BUFFER_FILE"; }
+readonly INPUT=$(cat)
+readonly EVENT=$(jq -r '.hook_event_name // ""' <<< "$INPUT")
+readonly SESSION=$(jq -r '.session_id // ""' <<< "$INPUT")
+readonly TRANSCRIPT=$(jq -r '.transcript_path // ""' <<< "$INPUT")
+readonly STATE="/tmp/opik-${SESSION}.json"
+readonly AGENTS="/tmp/opik-${SESSION}-agents.json"
 
-should_flush() {
-    local s=$(state_read)
-    [[ -z "$s" ]] && return 1
-    (( $(now_unix) - $(jval "$s" '.last_flush' '0') >= FLUSH_INTERVAL ))
-}
+log "=== $EVENT ==="
 
-flush() {
-    [[ ! -s "$BUFFER_FILE" ]] && return 0
-    [[ -f "$LOCK_FILE" ]] && (( $(now_unix) - $(cat "$LOCK_FILE") < 30 )) && return 0
-
-    echo "$(now_unix)" > "$LOCK_FILE"
-    local payload=$(jq -nc --slurpfile spans "$BUFFER_FILE" '{spans:$spans}')
-    local resp=$(api POST "/spans/batch" "$payload")
-
-    [[ -z "$resp" || ! "$resp" =~ \"errors\" ]] && {
-        rm -f "$BUFFER_FILE"
-        local s=$(state_read)
-        [[ -n "$s" ]] && jq --argjson t "$(now_unix)" '.last_flush=$t' <<< "$s" > "$STATE_FILE"
-    }
-    rm -f "$LOCK_FILE"
-}
+state() { [[ -f "$STATE" ]] && cat "$STATE" || echo ""; }
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Span Builder
 # ─────────────────────────────────────────────────────────────────────────────
 
 span() {
-    local id=$1 trace_id=$2 name=$3 type=$4 model=$5 ts=$6
-    local input=$7 output=$8 usage=$9
-    local metadata="${10}"
-    local parent="${11:-}"
-    [[ -z "$metadata" || "$metadata" == "null" ]] && metadata='{}'
-
-    jq -nc \
-        --arg id "$id" --arg trace_id "$trace_id" --arg parent_span_id "$parent" \
-        --arg name "$name" --arg type "$type" \
-        --arg start_time "$ts" --arg end_time "$ts" \
-        --arg project_name "$OPIK_PROJECT" --arg model "$model" --arg provider "anthropic" \
-        --argjson input "$input" --argjson output "$output" \
-        --argjson usage "$usage" --argjson metadata "$metadata" \
-        '$ARGS.named | if .parent_span_id == "" then del(.parent_span_id) else . end'
+    local id=$1 trace=$2 name=$3 type=$4 ts=$5 input=$6 output=$7 usage=${8:-'{}'} parent=${9:-}
+    local s
+    s=$(jq -nc --arg id "$id" --arg trace "$trace" --arg name "$name" --arg type "$type" \
+        --arg ts "$ts" --arg proj "$PROJECT" --argjson in "$input" --argjson out "$output" \
+        --argjson usage "$usage" \
+        '{id:$id,trace_id:$trace,name:$name,type:$type,start_time:$ts,end_time:$ts,
+          project_name:$proj,input:$in,output:$out,usage:$usage}')
+    [[ -n "$parent" ]] && s=$(jq -c --arg p "$parent" '. + {parent_span_id:$p}' <<< "$s")
+    echo "$s"
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Transcript Parsers
+# Transcript → Spans
 # ─────────────────────────────────────────────────────────────────────────────
 
-parse_tool_usage() {
-    local path=$1 tool_id=$2
-    [[ ! -f "$path" ]] && { echo '{}'; return; }
-    jq -c --arg id "$tool_id" '
-        select(.type=="assistant") | select(.message.content[0].id==$id) |
-        {model:.message.model, input_tokens:.message.usage.input_tokens, output_tokens:.message.usage.output_tokens}
-    ' < "$path" 2>/dev/null | tail -1 || echo '{}'
+process() {
+    local trace=$1 file=$2 start=${3:-0} parent=${4:-}
+    [[ ! -f "$file" ]] && return
+
+    local entries
+    entries=$(tail -n +"$((start + 1))" "$file" 2>/dev/null)
+    [[ -z "$entries" ]] && return
+
+    # Parse assistant messages
+    local parsed
+    parsed=$(jq -c 'select(.type=="assistant") | select(.message.content[0]|type=="object") |
+        {uuid,ts:.timestamp,ct:.message.content[0].type,c:.message.content[0],u:.message.usage}' <<< "$entries" 2>/dev/null)
+
+    # Tool results lookup
+    local results tasks
+    results=$(jq -sc '[.[]|select(.type=="user")|select(.message.content[0].type=="tool_result")|
+        {key:.message.content[0].tool_use_id,value:.message.content[0].content}]|from_entries' <<< "$entries" 2>/dev/null)
+    tasks=$(jq -sc '[.[]|select(.type=="user")|select(.toolUseResult)|
+        {key:.message.content[0].tool_use_id,value:.toolUseResult}]|from_entries' <<< "$entries" 2>/dev/null)
+    [[ -z "$results" || "$results" == "null" ]] && results='{}'
+    [[ -z "$tasks" || "$tasks" == "null" ]] && tasks='{}'
+
+    while IFS= read -r e; do
+        [[ -z "$e" ]] && continue
+        local uuid ts ct sid
+        uuid=$(jq -r '.uuid' <<< "$e")
+        ts=$(jq -r '.ts' <<< "$e")
+        ct=$(jq -r '.ct' <<< "$e")
+        sid=$(to_v7 "$uuid")
+
+        case "$ct" in
+            thinking)
+                local th usage inp out tot
+                th=$(jq -r '.c.thinking//"" ' <<< "$e")
+                usage=$(jq -c '.u//{}' <<< "$e")
+                inp=$(jq '(.input_tokens//0)+(.cache_creation_input_tokens//0)' <<< "$usage")
+                out=$(jq '.output_tokens//0' <<< "$usage")
+                tot=$((inp + out))
+                span "$sid" "$trace" "Thinking" "llm" "$ts" '{}' \
+                    "$(jq -nc --arg t "$th" '{thinking:$t}')" \
+                    "{\"prompt_tokens\":$inp,\"completion_tokens\":$out,\"total_tokens\":$tot}" "$parent"
+                ;;
+            text)
+                local txt
+                txt=$(jq -r '.c.text//""' <<< "$e")
+                span "$sid" "$trace" "Text" "general" "$ts" '{}' \
+                    "$(jq -nc --arg t "$txt" '{text:$t}')" '{}' "$parent"
+                ;;
+            tool_use)
+                local name tid tin tout tusage
+                name=$(jq -r '.c.name//"Tool"' <<< "$e")
+                tid=$(jq -r '.c.id//""' <<< "$e")
+                tusage='{}'
+
+                # Mask file operation fields
+                case "$name" in
+                    Edit)
+                        [[ "$TRUNCATE" == "true" ]] \
+                            && tin=$(jq -c --arg m "$TRUNC_MSG" '.c.input|.old_string=$m|.new_string=$m' <<< "$e") \
+                            || tin=$(jq -c '.c.input//{}' <<< "$e")
+                        tout=$(jq -nc --arg m "$TRUNC_MSG" '{result:$m}')
+                        ;;
+                    Write)
+                        [[ "$TRUNCATE" == "true" ]] \
+                            && tin=$(jq -c --arg m "$TRUNC_MSG" '.c.input|.content=$m' <<< "$e") \
+                            || tin=$(jq -c '.c.input//{}' <<< "$e")
+                        tout=$(jq -nc --arg m "$TRUNC_MSG" '{result:$m}')
+                        ;;
+                    Read)
+                        tin=$(jq -c '.c.input//{}' <<< "$e")
+                        tout=$(jq -nc --arg m "$TRUNC_MSG" '{result:$m}')
+                        ;;
+                    Task)
+                        local stype prompt tr resp tokens
+                        stype=$(jq -r '.c.input.subagent_type//"Task"' <<< "$e")
+                        name="${stype} Subagent"
+                        prompt=$(jq -r '.c.input.prompt//""' <<< "$e")
+                        tin=$(jq -nc --arg p "$prompt" '{prompt:$p}')
+                        tr=$(jq -c --arg id "$tid" '.[$id]//null' <<< "$tasks")
+                        if [[ -n "$tr" && "$tr" != "null" ]]; then
+                            resp=$(jq -r '.content[0].text//""' <<< "$tr")
+                            tout=$(jq -nc --arg r "$resp" '{response:$r}')
+                            tokens=$(jq '.totalTokens//0' <<< "$tr")
+                            [[ "$tokens" != "0" ]] && tusage="{\"total_tokens\":$tokens}"
+                        else
+                            tout='{}'
+                        fi
+                        ;;
+                    *)
+                        tin=$(jq -c '.c.input//{}' <<< "$e")
+                        local res
+                        res=$(jq -r --arg id "$tid" '.[$id]//""' <<< "$results")
+                        [[ -n "$res" ]] && tout=$(jq -nc --arg r "$res" '{result:$r}') || tout='{}'
+                        ;;
+                esac
+                span "$sid" "$trace" "$name" "tool" "$ts" "$tin" "$tout" "$tusage" "$parent"
+                ;;
+        esac
+    done <<< "$parsed"
 }
 
-parse_turn_usage() {
-    local path=$1 start=$2
-    [[ ! -f "$path" ]] && { echo '{}'; return; }
-    jq -s --arg start "$start" '
-        [.[] | select(.type=="assistant") | select(.message.usage) | select(.timestamp>=$start)] |
-        {model:(.[0].message.model//"unknown"), input:(map(.message.usage.input_tokens//0)|add),
-         output:(map(.message.usage.output_tokens//0)|add), calls:length}
-    ' < "$path" 2>/dev/null || echo '{}'
-}
-
-parse_response() {
-    local path=$1 start=$2
-    [[ ! -f "$path" ]] && return
-    jq -rs --arg start "$start" '
-        [.[] | select(.type=="assistant") | select(.timestamp>=$start) |
-         .message.content[]? | select(.type=="text") | .text] | join("\n\n")
-    ' < "$path" 2>/dev/null | head -c 10000
-}
-
-parse_subagent_info() {
-    local path=$1 agent_id=$2
-    [[ ! -f "$path" ]] && return
-    local pid=$(grep -o "\"agentId\":\"${agent_id}\".*\"parentToolUseID\":\"[^\"]*\"" "$path" 2>/dev/null \
-        | head -1 | grep -o '"parentToolUseID":"[^"]*"' | cut -d'"' -f4)
-    [[ -z "$pid" ]] && return
-    jq -c --arg id "$pid" 'select(.type=="assistant") | select(.message.content[0].id==$id) | .message.content[0].input' < "$path" 2>/dev/null | head -1
-}
-
-parse_subagent_transcript() {
-    local path=$1
-    [[ ! -f "$path" ]] && { echo '{"model":"unknown","input":0,"output":0,"tools":[],"response":""}'; return; }
-    jq -sc '
-        {
-            model: ([.[] | select(.type=="assistant") | .message.model][0] // "unknown"),
-            input: ([.[] | select(.type=="assistant") | .message.usage.input_tokens // 0] | add),
-            output: ([.[] | select(.type=="assistant") | .message.usage.output_tokens // 0] | add),
-            response: ([.[] | select(.type=="assistant") | .message.content[]? | select(.type=="text") | .text] | join("\n\n")),
-            tools: (
-                ([.[] | select(.type=="user") | select(.message.content | type=="array") |
-                  select(.message.content[0].type?=="tool_result") |
-                  {key:.message.content[0].tool_use_id, value:.message.content[0].content}] | from_entries) as $r |
-                [.[] | select(.type=="assistant") | select(.message.content | type=="array") |
-                 select(.message.content[0].type?=="tool_use") |
-                 {name:.message.content[0].name, input:.message.content[0].input, output:($r[.message.content[0].id]//null),
-                  model:.message.model, input_tokens:(.message.usage.input_tokens//0), output_tokens:(.message.usage.output_tokens//0)}]
-            )
-        }
-    ' < "$path" 2>/dev/null || echo '{"model":"unknown","input":0,"output":0,"tools":[],"response":""}'
+flush() {
+    local s trace start spans n
+    s=$(state); [[ -z "$s" ]] && return
+    trace=$(jv "$s" '.trace_id')
+    start=$(jv "$s" '.start_line' '0')
+    spans=$(process "$trace" "$TRANSCRIPT" "$start")
+    [[ -z "$spans" ]] && return
+    n=$(wc -l <<< "$spans" | tr -d ' ')
+    log "flush: $n spans"
+    api POST "/spans/batch" "$(jq -sc '{spans:.}' <<< "$spans")"
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -240,135 +258,111 @@ parse_subagent_transcript() {
 # ─────────────────────────────────────────────────────────────────────────────
 
 on_prompt() {
-    local prompt=$(jval "$INPUT" '.prompt')
-    local cwd=$(jval "$INPUT" '.cwd')
-    local project=$(basename "$cwd" 2>/dev/null || echo "unknown")
-    local trace_id=$(uuid7) ts=$(now_iso)
+    local prompt trace ts start now
+    prompt=$(jv "$INPUT" '.prompt')
+    trace=$(uuid7)
+    ts=$(iso)
+    start=0; [[ -f "$TRANSCRIPT" ]] && start=$(wc -l < "$TRANSCRIPT" | tr -d ' ')
+    now=$(date +%s)
 
-    jq -n --arg trace_id "$trace_id" --arg start_time "$ts" --arg session_id "$SESSION" \
-          --arg transcript_path "$TRANSCRIPT" --arg cwd "$cwd" --arg project "$project" \
-          --argjson last_flush "$(now_unix)" '$ARGS.named' > "$STATE_FILE"
-    rm -f "$BUFFER_FILE"
+    jq -n --arg trace "$trace" --arg ts "$ts" --arg sess "$SESSION" \
+        --arg trans "$TRANSCRIPT" --argjson start "$start" --argjson flush "$now" \
+        '{trace_id:$trace,start_time:$ts,session_id:$sess,transcript:$trans,start_line:$start,last_flush:$flush}' > "$STATE"
 
-    api POST "/traces" "$(jq -nc \
-        --arg id "$trace_id" --arg name "claude-code-turn" --arg start_time "$ts" \
-        --arg project_name "$OPIK_PROJECT" --arg thread_id "$SESSION" \
-        --arg prompt "$prompt" --arg cwd "$cwd" --arg project "$project" \
-        '{id:$id, name:$name, start_time:$start_time, project_name:$project_name,
-          thread_id:$thread_id, tags:["claude-code","project:"+$project],
-          input:{prompt:$prompt}, metadata:{cwd:$cwd,project:$project}}')" true
+    log "trace=$trace start=$start"
+    # Sync call - trace must exist before spans arrive
+    api POST "/traces" "$(jq -nc --arg id "$trace" --arg ts "$ts" --arg proj "$PROJECT" \
+        --arg sess "$SESSION" --arg p "$prompt" \
+        '{id:$id,name:"claude-code",start_time:$ts,project_name:$proj,
+          thread_id:$sess,tags:["claude-code"],input:{text:$p}}')"
 }
 
 on_tool() {
-    local s=$(state_read); [[ -z "$s" ]] && return 0
-
-    local trace_id=$(jval "$s" '.trace_id')
-    local tool=$(jval "$INPUT" '.tool_name' 'unknown')
-    local tool_id=$(jval "$INPUT" '.tool_use_id')
-    local input=$(truncate "$(jobj "$INPUT" '.tool_input')")
-    local output=$(truncate "$(jobj "$INPUT" '.tool_response')")
-    local span_id=$(uuid7) ts=$(now_iso)
-
-    local u=$(parse_tool_usage "$(jval "$s" '.transcript_path')" "$tool_id")
-    local model=$(jval "$u" '.model' 'unknown')
-    local itok=$(jval "$u" '.input_tokens' '0')
-    local otok=$(jval "$u" '.output_tokens' '0')
-
-    local meta=$(jq -nc --arg model "$model" --arg tool_use_id "$tool_id" \
-        --argjson input_tokens "${itok:-0}" --argjson output_tokens "${otok:-0}" '$ARGS.named')
-
-    buffer "$(span "$span_id" "$trace_id" "$tool" "tool" "$model" "$ts" \
-        "$input" "$output" "$(json_usage "${itok:-0}" "${otok:-0}")" "$meta")"
-    should_flush && flush
+    local s now last
+    s=$(state); [[ -z "$s" ]] && return
+    now=$(date +%s)
+    last=$(jv "$s" '.last_flush' '0')
+    if ((now - last >= 5)); then
+        log "flushing ($((now - last))s)"
+        flush
+        # Use captured state to avoid race
+        jq --argjson t "$now" '.last_flush=$t' <<< "$s" > "${STATE}.tmp" && mv "${STATE}.tmp" "$STATE"
+    fi
 }
 
 on_stop() {
-    local s=$(state_read); [[ -z "$s" ]] && return 0
+    local s trace start ts output
+    s=$(state); [[ -z "$s" ]] && return
+    trace=$(jv "$s" '.trace_id')
+    start=$(jv "$s" '.start_line' '0')
+    ts=$(iso)
+
     flush
 
-    local trace_id=$(jval "$s" '.trace_id')
-    local transcript=$(jval "$s" '.transcript_path')
-    local start=$(jval "$s" '.start_time')
-    local ts=$(now_iso)
+    # Get final output (last text from assistant)
+    output=""
+    if [[ -f "$TRANSCRIPT" ]]; then
+        output=$(tail -n +"$((start + 1))" "$TRANSCRIPT" 2>/dev/null | \
+            jq -r 'select(.type=="assistant")|select(.message.content[0].type=="text")|
+            .message.content[0].text' 2>/dev/null | tail -1) || true
+    fi
 
-    local u=$(parse_turn_usage "$transcript" "$start")
-    local model=$(jval "$u" '.model' 'unknown')
-    local itok=$(jval "$u" '.input' '0')
-    local otok=$(jval "$u" '.output' '0')
-    local calls=$(jval "$u" '.calls' '0')
-    local response=$(parse_response "$transcript" "$start")
+    api PATCH "/traces/$trace" "$(jq -nc --arg proj "$PROJECT" --arg ts "$ts" --arg out "$output" \
+        '{project_name:$proj,end_time:$ts,output:{text:$out}}')"
 
-    api PATCH "/traces/${trace_id}" "$(jq -nc \
-        --arg project_name "$OPIK_PROJECT" --arg end_time "$ts" --arg model "$model" --arg response "$response" \
-        --argjson itok "$itok" --argjson otok "$otok" --argjson calls "$calls" \
-        '{project_name:$project_name, end_time:$end_time, model:$model,
-          metadata:{model:$model, input_tokens:$itok, output_tokens:$otok, api_calls:$calls},
-          usage:{prompt_tokens:$itok, completion_tokens:$otok, total_tokens:($itok+$otok)},
-          output:{response:$response}}')" true
-
-    rm -f "$STATE_FILE" "$LOCK_FILE"
-}
-
-on_subagent() {
-    local s=$(state_read); [[ -z "$s" ]] && return 0
-
-    local trace_id=$(jval "$s" '.trace_id')
-    local agent_id=$(jval "$INPUT" '.agent_id')
-    local agent_path=$(jval "$INPUT" '.agent_transcript_path')
-    local span_id=$(uuid7) ts=$(now_iso)
-
-    local info=$(parse_subagent_info "$(jval "$s" '.transcript_path')" "$agent_id")
-    local atype=$(jval "$info" '.subagent_type' '')
-    local prompt=$(jval "$info" '.prompt' '')
-    local desc=$(jval "$info" '.description' '')
-    local name="subagent:${atype:-$agent_id}"
-
-    local data=$(parse_subagent_transcript "$agent_path")
-    local model=$(jval "$data" '.model' 'unknown')
-    local itok=$(jval "$data" '.input' '0')
-    local otok=$(jval "$data" '.output' '0')
-    local response=$(jval "$data" '.response' '' | head -c 5000)
-    local tools=$(jq -c '.tools // []' <<< "$data" 2>/dev/null || echo '[]')
-
-    local meta=$(jq -nc --arg agent_id "$agent_id" --arg agent_type "$atype" --arg model "$model" \
-        --argjson input_tokens "${itok:-0}" --argjson output_tokens "${otok:-0}" '$ARGS.named')
-    local input=$(jq -nc --arg prompt "$prompt" --arg description "$desc" '$ARGS.named')
-    local output=$(jq -nc --arg response "$response" '$ARGS.named')
-
-    buffer "$(span "$span_id" "$trace_id" "$name" "llm" "$model" "$ts" \
-        "$input" "$output" "$(json_usage "${itok:-0}" "${otok:-0}")" "$meta")"
-
-    local n=$(jq 'length' <<< "$tools" 2>/dev/null || echo 0)
-    for ((i=0; i<n; i++)); do
-        local t=$(jq -c ".[$i]" <<< "$tools")
-        local tname=$(jval "$t" '.name' 'unknown')
-        local tinput=$(truncate "$(jq -c '.input // {}' <<< "$t")")
-        local toutraw=$(jq -c '.output // null' <<< "$t")
-        local toutput=$(truncate "$(jq -nc --argjson r "$toutraw" '{result:$r}' 2>/dev/null || echo '{"result":null}')")
-        local tmodel=$(jval "$t" '.model' 'unknown')
-        local ti=$(jval "$t" '.input_tokens' '0')
-        local to=$(jval "$t" '.output_tokens' '0')
-
-        buffer "$(span "$(uuid7)" "$trace_id" "$tname" "tool" "$tmodel" "$ts" \
-            "$tinput" "$toutput" "$(json_usage "${ti:-0}" "${to:-0}")" "{}" "$span_id")"
-    done
-
-    should_flush && flush
+    rm -f "$STATE" "$AGENTS"
+    log "done"
 }
 
 on_compact() {
-    local s=$(state_read); [[ -z "$s" ]] && return 0
-
-    local trace_id=$(jval "$s" '.trace_id')
-    local trigger=$(jval "$INPUT" '.trigger' 'auto')
-    local span_id=$(uuid7) ts=$(now_iso)
-
-    local input=$(jq -nc --arg trigger "$trigger" '{trigger:$trigger}')
-    local output=$(jq -nc '{status:"context_compacted"}')
-
-    buffer "$(span "$span_id" "$trace_id" "context:compaction" "general" "n/a" "$ts" \
-        "$input" "$output" "$(json_usage 0 0)" "{}")"
+    local s trace ts sid
+    s=$(state); [[ -z "$s" ]] && return
+    trace=$(jv "$s" '.trace_id')
+    ts=$(iso)
+    sid=$(uuid7)
     flush
+    api POST "/spans/batch" "{\"spans\":[$(span "$sid" "$trace" "Compaction" "general" "$ts" \
+        '{"event":"context_compacted"}' '{"status":"compacted"}')]}"
+}
+
+on_subagent_start() {
+    local aid atype task_uuid existing
+    aid=$(jv "$INPUT" '.agent_id')
+    atype=$(jv "$INPUT" '.agent_type')
+    log "subagent_start: $aid ($atype)"
+    [[ -z "$aid" ]] && return
+
+    task_uuid=$(reverse_file "$TRANSCRIPT" | jq -r 'select(.type=="assistant")|
+        select(.message.content[0].type=="tool_use")|select(.message.content[0].name=="Task")|.uuid' | head -1)
+    [[ -z "$task_uuid" || "$task_uuid" == "null" ]] && return
+
+    log "map: $aid -> $task_uuid"
+    existing='{}'; [[ -f "$AGENTS" ]] && existing=$(cat "$AGENTS")
+    jq --arg a "$aid" --arg u "$task_uuid" '.+{($a):$u}' <<< "$existing" > "$AGENTS"
+}
+
+on_subagent_stop() {
+    local s aid atrans trace parent_uuid parent_sid spans n
+    s=$(state); [[ -z "$s" ]] && return
+    aid=$(jv "$INPUT" '.agent_id')
+    atrans=$(jv "$INPUT" '.agent_transcript_path')
+    log "subagent_stop: $aid"
+
+    [[ -z "$aid" || -z "$atrans" || ! -f "$atrans" ]] && return
+    trace=$(jv "$s" '.trace_id')
+
+    parent_uuid=""
+    [[ -f "$AGENTS" ]] && parent_uuid=$(jq -r --arg a "$aid" '.[$a]//""' "$AGENTS")
+    [[ -z "$parent_uuid" ]] && return
+
+    parent_sid=$(to_v7 "$parent_uuid")
+    log "processing subagent with parent=$parent_sid"
+
+    spans=$(process "$trace" "$atrans" 0 "$parent_sid")
+    [[ -z "$spans" ]] && return
+    n=$(wc -l <<< "$spans" | tr -d ' ')
+    log "subagent flush: $n spans"
+    api POST "/spans/batch" "$(jq -sc '{spans:.}' <<< "$spans")"
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -376,9 +370,13 @@ on_compact() {
 # ─────────────────────────────────────────────────────────────────────────────
 
 case "$EVENT" in
-    UserPromptSubmit) on_prompt ;;
-    PostToolUse)      on_tool ;;
-    SubagentStop)     on_subagent ;;
-    PreCompact)       on_compact ;;
-    Stop)             on_stop ;;
+    UserPromptSubmit)   on_prompt ;;
+    PostToolUse|PostToolUseFailure) on_tool ;;
+    SubagentStart)      on_subagent_start ;;
+    SubagentStop)       on_subagent_stop ;;
+    Stop|SessionEnd)    on_stop ;;
+    PreCompact)         on_compact ;;
+    *)                  log "unknown: $EVENT" ;;
 esac
+
+exit 0

@@ -1,7 +1,7 @@
 {
-  "name": "opik-claude-code",
-  "version": "0.1.0",
-  "description": "Log Claude Code sessions to Opik for LLM observability - traces, spans, and tool calls",
+  "name": "opik-logger",
+  "version": "1.0.0",
+  "description": "Log Claude Code sessions to Opik for LLM observability",
   "author": {
     "name": "Comet ML",
     "url": "https://github.com/comet-ml"
@@ -15,5 +15,6 @@
     "tracing",
     "llm",
     "hooks"
-  ]
+  ],
+  "hooks": "../hooks/hooks.json"
 }

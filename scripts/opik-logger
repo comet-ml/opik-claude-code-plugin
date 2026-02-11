@@ -1,0 +1,8 @@
+#!/bin/bash
+# Wrapper script that selects the correct binary for the current platform
+DIR="$(dirname "$0")/../bin"
+OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+ARCH=$(uname -m)
+[[ "$ARCH" == "x86_64" ]] && ARCH="amd64"
+[[ "$ARCH" == "aarch64" ]] && ARCH="arm64"
+exec "$DIR/opik-logger-${OS}-${ARCH}" "$@"
