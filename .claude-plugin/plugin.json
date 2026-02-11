@@ -1,20 +1,21 @@
 {
-  "name": "opik-logger",
-  "version": "1.0.0",
-  "description": "Log Claude Code sessions to Opik for LLM observability",
+  "name": "opik",
+  "version": "0.1.0",
+  "description": "LLM observability tooling for agent development and Claude Code",
   "author": {
     "name": "Comet ML",
-    "url": "https://github.com/comet-ml"
+    "url": "https://comet.com"
   },
   "repository": "https://github.com/comet-ml/opik-claude-plugin",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "keywords": [
-    "claude-code",
     "opik",
     "observability",
     "tracing",
-    "llm",
-    "hooks"
+    "evaluation",
+    "agents"
   ],
-  "hooks": "../hooks/hooks.json"
+  "hooks": "./hooks/hooks.json",
+  "skills": "./skills",
+  "agents": "./agents"
 }

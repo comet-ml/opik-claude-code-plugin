@@ -1,0 +1,27 @@
+{
+  "name": "opik",
+  "owner": {
+    "name": "Comet ML",
+    "url": "https://comet.com"
+  },
+  "plugins": [
+    {
+      "name": "opik",
+      "source": "./",
+      "description": "All the tooling you need to add observability to Claude Code and your agents",
+      "author": {
+        "name": "Comet ML",
+        "url": "https://comet.com"
+      },
+      "homepage": "https://github.com/comet-ml/opik-claude-plugin",
+      "repository": "https://github.com/comet-ml/opik-claude-plugin",
+      "license": "Apache-2.0",
+      "keywords": [
+        "opik",
+        "observability",
+        "tracing"
+      ],
+      "category": "observability"
+    }
+  ]
+}

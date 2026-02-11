@@ -7,7 +7,6 @@ import (
 	"strings"
 )
 
-// Config holds the Opik configuration
 type Config struct {
 	URL       string
 	Project   string
@@ -15,55 +14,44 @@ type Config struct {
 	Workspace string
 	Debug     bool
 	Truncate  bool
+	Enabled   bool
 }
 
 const truncateMsg = "[ TRUNCATED -- set OPIK_CC_TRUNCATE_FIELDS=false ]"
 
-// LoadConfig loads configuration from environment variables and ~/.opik.config
-func LoadConfig() *Config {
-	cfg := &Config{
-		Project:  "claude-code",
-		Truncate: true,
-	}
-
-	// Load from config file first
+// LoadConfig loads configuration from environment variables and ~/.opik.config.
+// Returns (nil, nil) if OPIK_BASE_URL is not set (plugin disabled).
+func LoadConfig() (*Config, error) {
 	homeDir, _ := os.UserHomeDir()
-	configPath := filepath.Join(homeDir, ".opik.config")
-	fileConfig := parseConfigFile(configPath)
-
-	// URL (required)
-	cfg.URL = getEnvOrConfig("OPIK_BASE_URL", fileConfig, "url_override")
-	if cfg.URL == "" {
-		return nil
+	var fileConfig map[string]string
+	if homeDir != "" {
+		fileConfig = parseConfigFile(filepath.Join(homeDir, ".opik.config"))
 	}
-	cfg.URL = strings.TrimSuffix(cfg.URL, "/") + "/v1/private"
 
-	// Project
-	if proj := getEnvOrConfig("OPIK_PROJECT", fileConfig, "project_name"); proj != "" {
+	url := getEnvOrConfig("OPIK_BASE_URL", fileConfig, "url_override")
+	if url == "" {
+		return nil, nil
+	}
+
+	cfg := &Config{
+		URL:       strings.TrimSuffix(url, "/") + "/v1/private",
+		Project:   "claude-code",
+		APIKey:    getEnvOrConfig("OPIK_API_KEY", fileConfig, "api_key"),
+		Workspace: getEnvOrConfig("OPIK_WORKSPACE", fileConfig, "workspace"),
+		Debug:     os.Getenv("OPIK_CC_DEBUG") == "true",
+		Truncate:  os.Getenv("OPIK_CC_TRUNCATE_FIELDS") != "false",
+		Enabled:   isTracingEnabled(),
+	}
+
+	if proj := getEnvOrConfig("OPIK_CC_PROJECT", fileConfig, "project_name"); proj != "" {
 		cfg.Project = proj
 	}
 
-	// API Key
-	cfg.APIKey = getEnvOrConfig("OPIK_API_KEY", fileConfig, "api_key")
-
-	// Workspace
-	cfg.Workspace = getEnvOrConfig("OPIK_WORKSPACE", fileConfig, "workspace")
-
-	// Debug
-	cfg.Debug = os.Getenv("OPIK_CC_DEBUG") == "true"
-
-	// Truncate
-	if os.Getenv("OPIK_CC_TRUNCATE_FIELDS") == "false" {
-		cfg.Truncate = false
-	}
-
-	return cfg
+	return cfg, nil
 }
 
-// parseConfigFile reads key=value pairs from a config file
 func parseConfigFile(path string) map[string]string {
 	result := make(map[string]string)
-	
 	file, err := os.Open(path)
 	if err != nil {
 		return result
@@ -76,22 +64,36 @@ func parseConfigFile(path string) map[string]string {
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		
-		parts := strings.SplitN(line, "=", 2)
-		if len(parts) == 2 {
-			key := strings.TrimSpace(parts[0])
-			value := strings.TrimSpace(parts[1])
-			result[key] = value
+		if parts := strings.SplitN(line, "=", 2); len(parts) == 2 {
+			result[strings.TrimSpace(parts[0])] = strings.TrimSpace(parts[1])
 		}
 	}
-	
 	return result
 }
 
-// getEnvOrConfig returns env var value or falls back to config file
 func getEnvOrConfig(envVar string, fileConfig map[string]string, configKey string) string {
 	if val := os.Getenv(envVar); val != "" {
 		return val
 	}
 	return fileConfig[configKey]
+}
+
+// isTracingEnabled checks if tracing is enabled via state files.
+// Precedence: project-level > user-level > default (false)
+func isTracingEnabled() bool {
+	// Check project-level first (current working directory)
+	if data, err := os.ReadFile(".claude/.opik-tracing-enabled"); err == nil {
+		return strings.TrimSpace(string(data)) == "true"
+	}
+
+	// Fall back to user-level
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return false
+	}
+	if data, err := os.ReadFile(filepath.Join(homeDir, ".claude", ".opik-tracing-enabled")); err == nil {
+		return strings.TrimSpace(string(data)) == "true"
+	}
+
+	return false
 }

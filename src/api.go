@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"time"
@@ -14,22 +15,17 @@ type API struct {
 	client *http.Client
 }
 
-// NewAPI creates a new API client
-func NewAPI(config *Config) *API {
+func NewAPI(cfg *Config) *API {
 	return &API{
-		config: config,
-		client: &http.Client{
-			Timeout: 30 * time.Second,
-		},
+		config: cfg,
+		client: &http.Client{Timeout: 30 * time.Second},
 	}
 }
 
-// Post sends a POST request to the API
 func (a *API) Post(endpoint string, data interface{}) error {
 	return a.request("POST", endpoint, data)
 }
 
-// Patch sends a PATCH request to the API
 func (a *API) Patch(endpoint string, data interface{}) error {
 	return a.request("PATCH", endpoint, data)
 }
@@ -40,8 +36,7 @@ func (a *API) request(method, endpoint string, data interface{}) error {
 		return err
 	}
 
-	url := a.config.URL + endpoint
-	req, err := http.NewRequest(method, url, bytes.NewBuffer(jsonData))
+	req, err := http.NewRequest(method, a.config.URL+endpoint, bytes.NewBuffer(jsonData))
 	if err != nil {
 		return err
 	}
@@ -56,16 +51,13 @@ func (a *API) request(method, endpoint string, data interface{}) error {
 
 	resp, err := a.client.Do(req)
 	if err != nil {
-		if a.config.Debug {
-			debugLog("API %s %s failed: %v", method, endpoint, err)
-		}
-		return err
+		return fmt.Errorf("%s %s: %w", method, endpoint, err)
 	}
 	defer resp.Body.Close()
 
-	if a.config.Debug && resp.StatusCode >= 400 {
+	if resp.StatusCode >= 400 {
 		body, _ := io.ReadAll(resp.Body)
-		debugLog("API %s %s failed (%d): %s", method, endpoint, resp.StatusCode, string(body))
+		return fmt.Errorf("%s %s: %d %s", method, endpoint, resp.StatusCode, body)
 	}
 
 	return nil

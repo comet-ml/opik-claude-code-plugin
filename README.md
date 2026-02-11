@@ -1,88 +1,127 @@
 # Opik Claude Code Plugin
 
-Log Claude Code sessions to [Opik](https://github.com/comet-ml/opik) for LLM observability.
+Log Claude Code sessions to [Opik](https://github.com/comet-ml/opik) for LLM observability, plus skills and agents for building observable AI applications.
 
-## How it works
+## Features
+
+- **Session Tracing**: Automatically log Claude Code sessions as Opik traces
+- **Span Tracking**: Each tool call becomes a span within the trace
+- **Subagent Support**: Nested agent calls are tracked with parent-child relationships
+- **Skills**: Built-in knowledge for LLM observability, tracing, and evaluation
+- **Agents**: Code review agent for agent architecture best practices
+
+## How Tracing Works
+We trigger tracing for everything done in Claude Code, but don't slow you down. 
 
 ```
 User submits prompt  →  UserPromptSubmit hook  →  CREATE TRACE
         ↓
 Claude uses tools    →  PostToolUse hooks      →  CREATE SPANS
         ↓
-Claude finishes      →  Stop hook              →  END TRACE + CLEANUP
+Claude finishes      →  Stop hook              →  END TRACE
 ```
 
-Each Q&A turn becomes an Opik trace. Each tool call becomes a span within that trace.
-Multiple concurrent Claude Code sessions are isolated by session ID.
+Each conversation turn becomes an Opik trace. Tool calls, thoughts, and responses become spans. Subagent invocations are nested under their parent Task span.
+
+## Installation
+
+```bash
+claude plugins add github:comet-ml/opik-claude-plugin
+```
+
+Or from within Claude Code:
+
+```
+/install github:comet-ml/opik-claude-plugin
+```
+
+## Configuration
+
+Run the Opik CLI to configure your connection:
+
+```bash
+opik configure
+```
+
+This creates `~/.opik.config` with your API URL, key, and workspace.
+
+### Optional Environment Variables
+
+```bash
+export OPIK_PROJECT="claude-code"           # Project name (default: claude-code)
+export OPIK_CC_DEBUG="true"                 # Enable debug logging
+export OPIK_CC_TRUNCATE_FIELDS="false"      # Don't truncate large fields
+```
+
+## Commands
+
+### `/opik` - Control Tracing
+
+```bash
+/opik start tracing           # Enable tracing for this project
+/opik stop tracing            # Disable tracing for this project
+/opik status                  # Check current tracing status
+
+/opik start tracing --global  # Enable tracing for all projects
+/opik stop tracing --global   # Disable tracing globally
+```
+
+Tracing state is stored in `.claude/.opik-tracing-enabled` (project) or `~/.claude/.opik-tracing-enabled` (global). Project settings take precedence.
+
+**Note**: Changes affect new sessions only.
+
+## Skills
+
+### `/agent-ops` - LLM Observability Knowledge
+
+Comprehensive guidance on:
+- Opik setup and configuration
+- Tracing with Python/TypeScript SDKs
+- 80+ framework integrations (LangChain, CrewAI, OpenAI, Anthropic, etc.)
+- Evaluation with 41 built-in metrics
+- Production monitoring, guardrails, and debugging
+
+## Agents
+
+### `agent-reviewer`
+
+Reviews agent code for:
+- Idempotence and retry safety
+- Security vulnerabilities
+- Architecture patterns
+- State management
+- Observability hooks
 
 ## Directory Structure
 
 ```
 opik-claude-plugin/
 ├── .claude-plugin/
-│   └── plugin.json       # Plugin metadata
+│   ├── plugin.json         # Plugin manifest
+│   └── marketplace.json    # Marketplace definition (source: "./")
 ├── hooks/
-│   └── hooks.json        # Hook configuration (auto-loaded by Claude Code v2.1+)
+│   └── hooks.json          # Hook configuration
 ├── scripts/
-│   └── hooks/
-│       └── opik-logger.sh  # Main logging script
-└── README.md
+│   └── opik-logger         # Platform selector script
+├── bin/
+│   └── opik-logger-*       # Compiled binaries (darwin/linux, amd64/arm64)
+├── src/
+│   └── *.go                # Go source code
+├── skills/
+│   └── agent-ops/          # Observability skill + references
+├── agents/
+│   └── agent-reviewer.md   # Agent review agent
+└── commands/
+    └── opik.md             # /opik command
 ```
 
-## Requirements
-
-- Claude Code CLI v2.1.0+
-- `jq` - JSON processor
-- `curl` - HTTP client
-- Opik server running (local or cloud)
-
-## Installation
-
-### As a Plugin (recommended)
+## Building from Source
 
 ```bash
-# From plugin marketplace (when available)
-/plugin install opik-claude-code
-
-# Or from GitHub
-/plugin install github:comet-ml/opik-claude-plugin
+make build        # Build for all platforms
+make build-local  # Build for current platform only
 ```
-
-### Manual Installation
-
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/comet-ml/opik-claude-plugin ~/.claude/plugins/opik-claude-plugin
-   ```
-
-2. The hooks will be auto-loaded by Claude Code v2.1+
-
-## Configuration
-
-Set environment variables for your Opik instance:
-
-### Local Opik (default)
-
-```bash
-export OPIK_BASE_URL="http://localhost:5173/api/v1/private"
-export OPIK_PROJECT="claude-code"
-```
-
-### Opik Cloud
-
-```bash
-export OPIK_BASE_URL="https://www.comet.com/opik/api/v1/private"
-export OPIK_API_KEY="your-api-key"
-export OPIK_WORKSPACE="your-workspace"
-export OPIK_PROJECT="claude-code"
-```
-
-## State Management
-
-Trace state is stored in `/tmp/opik-claude-{session_id}.json` during a turn.
-The `Stop` hook cleans up this file after each turn completes.
-Each session has its own temp file, ensuring isolation between concurrent sessions.
 
 ## License
 
-MIT
+Apache-2.0
