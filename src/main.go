@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -121,6 +122,9 @@ func onTool() {
 
 // onStop handles Stop/SessionEnd - final flush and trace update
 func onStop() {
+	// Small delay to ensure transcript is fully written (race condition workaround)
+	time.Sleep(100 * time.Millisecond)
+
 	state, err := LoadState(input.SessionID)
 	if err != nil {
 		return
@@ -396,13 +400,23 @@ func getLastOutput(state *State) string {
 	return lastText
 }
 
-// countLines counts the number of lines in a file
+// countLines counts the number of raw lines in a file (like wc -l)
 func countLines(path string) int {
-	entries, err := ReadTranscript(path, 0)
+	file, err := os.Open(path)
 	if err != nil {
 		return 0
 	}
-	return len(entries)
+	defer file.Close()
+
+	count := 0
+	scanner := bufio.NewScanner(file)
+	// Use large buffer for long lines
+	buf := make([]byte, 0, 1024*1024)
+	scanner.Buffer(buf, 10*1024*1024)
+	for scanner.Scan() {
+		count++
+	}
+	return count
 }
 
 // isoNow returns current time in ISO8601 format with milliseconds
