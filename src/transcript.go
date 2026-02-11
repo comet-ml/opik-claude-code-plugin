@@ -102,22 +102,6 @@ func ReadTranscript(path string, startLine int) ([]TranscriptEntry, error) {
 	return entries, scanner.Err()
 }
 
-// ReadTranscriptReverse reads a transcript file in reverse order (for finding last Task)
-func ReadTranscriptReverse(path string) ([]TranscriptEntry, error) {
-	// Read all entries and return in reverse
-	entries, err := ReadTranscript(path, 0)
-	if err != nil {
-		return nil, err
-	}
-
-	// Reverse the slice
-	for i, j := 0, len(entries)-1; i < j; i, j = i+1, j-1 {
-		entries[i], entries[j] = entries[j], entries[i]
-	}
-
-	return entries, nil
-}
-
 // BuildToolResults builds a map of tool_use_id -> ToolResultInfo from user messages
 func BuildToolResults(entries []TranscriptEntry) map[string]*ToolResultInfo {
 	results := make(map[string]*ToolResultInfo)

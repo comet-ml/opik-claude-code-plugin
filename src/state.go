@@ -30,13 +30,14 @@ func agentsPath(sessionID string) string {
 }
 
 func LoadState(sessionID string) (*State, error) {
-	data, err := os.ReadFile(statePath(sessionID))
+	path := statePath(sessionID)
+	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("read %s: %w", path, err)
 	}
 	var state State
 	if err := json.Unmarshal(data, &state); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("parse state: %w", err)
 	}
 	return &state, nil
 }
@@ -44,16 +45,16 @@ func LoadState(sessionID string) (*State, error) {
 func SaveState(state *State) error {
 	data, err := json.Marshal(state)
 	if err != nil {
-		return err
+		return fmt.Errorf("marshal state: %w", err)
 	}
 	path := statePath(state.SessionID)
 	tmpPath := path + ".tmp"
 	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
-		return err
+		return fmt.Errorf("write %s: %w", tmpPath, err)
 	}
 	if err := os.Rename(tmpPath, path); err != nil {
 		os.Remove(tmpPath)
-		return err
+		return fmt.Errorf("rename to %s: %w", path, err)
 	}
 	return nil
 }
@@ -78,16 +79,16 @@ func LoadAgentMap(sessionID string) AgentMap {
 func SaveAgentMap(sessionID string, agents AgentMap) error {
 	data, err := json.Marshal(agents)
 	if err != nil {
-		return err
+		return fmt.Errorf("marshal agent map: %w", err)
 	}
 	path := agentsPath(sessionID)
 	tmpPath := path + ".tmp"
 	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
-		return err
+		return fmt.Errorf("write %s: %w", tmpPath, err)
 	}
 	if err := os.Rename(tmpPath, path); err != nil {
 		os.Remove(tmpPath)
-		return err
+		return fmt.Errorf("rename to %s: %w", path, err)
 	}
 	return nil
 }

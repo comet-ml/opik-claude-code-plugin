@@ -14,7 +14,13 @@ func uuid7() string {
 
 	// Random bytes for the rest
 	randBytes := make([]byte, 10)
-	rand.Read(randBytes)
+	if _, err := rand.Read(randBytes); err != nil {
+		// Fallback: use nanoseconds for entropy (extremely rare path)
+		nanos := time.Now().UnixNano()
+		for i := range randBytes {
+			randBytes[i] = byte(nanos >> (i * 8))
+		}
+	}
 
 	// Format: xxxxxxxx-xxxx-7xxx-yxxx-xxxxxxxxxxxx
 	// First 48 bits: timestamp

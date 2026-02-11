@@ -33,12 +33,12 @@ func (a *API) Patch(endpoint string, data interface{}) error {
 func (a *API) request(method, endpoint string, data interface{}) error {
 	jsonData, err := json.Marshal(data)
 	if err != nil {
-		return err
+		return fmt.Errorf("%s %s: marshal: %w", method, endpoint, err)
 	}
 
 	req, err := http.NewRequest(method, a.config.URL+endpoint, bytes.NewBuffer(jsonData))
 	if err != nil {
-		return err
+		return fmt.Errorf("%s %s: build request: %w", method, endpoint, err)
 	}
 
 	req.Header.Set("Content-Type", "application/json")
@@ -53,7 +53,10 @@ func (a *API) request(method, endpoint string, data interface{}) error {
 	if err != nil {
 		return fmt.Errorf("%s %s: %w", method, endpoint, err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+	}()
 
 	if resp.StatusCode >= 400 {
 		body, _ := io.ReadAll(resp.Body)

@@ -15,7 +15,7 @@ const (
 	initialBufferSize = 1 << 20  // 1 MB
 	maxBufferSize     = 10 << 20 // 10 MB
 	maxLogFileSize    = 1 << 20  // 1 MB
-	flushIntervalSecs = 5
+	flushInterval     = 5 * time.Second
 )
 
 // HookInput represents the input received from Claude Code hooks
@@ -131,7 +131,7 @@ func onTool() {
 	}
 
 	now := time.Now().Unix()
-	if now-state.LastFlush >= flushIntervalSecs {
+	if time.Since(time.Unix(state.LastFlush, 0)) >= flushInterval {
 		debugLog("flushing (%ds)", now-state.LastFlush)
 		flush(state)
 		state.LastFlush = now
@@ -142,6 +142,7 @@ func onTool() {
 }
 
 func onStop() {
+	// Brief delay to ensure transcript is fully written before reading
 	time.Sleep(100 * time.Millisecond)
 
 	state, err := LoadState(input.SessionID)
@@ -203,14 +204,15 @@ func onSubagentStart() {
 
 	debugLog("subagent_start: %s (%s)", input.AgentID, input.AgentType)
 
-	entries, err := ReadTranscriptReverse(input.TranscriptPath)
+	entries, err := ReadTranscript(input.TranscriptPath, 0)
 	if err != nil {
 		debugLog("read transcript: %v", err)
 		return
 	}
 
 	var taskUUID string
-	for _, entry := range entries {
+	for i := len(entries) - 1; i >= 0; i-- {
+		entry := entries[i]
 		if entry.Type != "assistant" || entry.Message == nil || len(entry.Message.Content) == 0 {
 			continue
 		}
@@ -235,15 +237,15 @@ func onSubagentStart() {
 }
 
 func onSubagentStop() {
-	state, err := LoadState(input.SessionID)
-	if err != nil {
-		debugLog("load state: %v", err)
-		return
-	}
-
 	debugLog("subagent_stop: %s", input.AgentID)
 
 	if input.AgentID == "" || input.AgentTranscriptPath == "" {
+		return
+	}
+
+	state, err := LoadState(input.SessionID)
+	if err != nil {
+		debugLog("load state: %v", err)
 		return
 	}
 
@@ -268,36 +270,42 @@ func onSubagentStop() {
 }
 
 func flush(state *State) {
+	// Update trace metadata (name and model) if not already sent
+	// Do this first, reading ALL entries, before checking for new spans
+	if !state.SlugSent {
+		allEntries, err := ReadTranscript(state.Transcript, 0)
+		if err == nil && len(allEntries) > 0 {
+			updates := map[string]interface{}{
+				"project_name": config.Project,
+			}
+
+			slug := findSlug(allEntries)
+			debugLog("findSlug: allEntries=%d slug=%q", len(allEntries), slug)
+			if slug != "" {
+				updates["name"] = slug
+			}
+
+			// Only update model for traces we own (not parent traces)
+			if config.ParentTraceID == "" {
+				if model := FindModel(allEntries); model != "" {
+					updates["model"] = model
+				}
+			}
+
+			if len(updates) > 1 { // More than just project_name
+				if err := api.Patch("/traces/"+state.TraceID, updates); err != nil {
+					debugLog("update trace metadata: %v", err)
+				} else {
+					state.SlugSent = true
+				}
+			}
+		}
+	}
+
+	// Now process new entries for spans
 	entries, err := ReadTranscript(state.Transcript, state.StartLine)
 	if err != nil || len(entries) == 0 {
 		return
-	}
-
-	// Update trace metadata (name and model) if not already sent
-	if !state.SlugSent {
-		updates := map[string]interface{}{
-			"project_name": config.Project,
-		}
-
-		if slug := findSlug(entries); slug != "" {
-			updates["name"] = slug
-		}
-
-		// Only update model for traces we own (not parent traces)
-		if config.ParentTraceID == "" {
-			if model := FindModel(entries); model != "" {
-				updates["model"] = model
-			}
-		}
-
-		if len(updates) > 1 { // More than just project_name
-			if err := api.Patch("/traces/"+state.TraceID, updates); err != nil {
-				debugLog("update trace: %v", err)
-			} else {
-				state.SlugSent = true
-				debugLog("updated trace metadata")
-			}
-		}
 	}
 
 	spans := processTranscriptEntries(state.TraceID, entries, "")
@@ -388,7 +396,7 @@ func processTranscriptEntries(traceID string, entries []TranscriptEntry, parentS
 			span.Output = map[string]interface{}{"text": p.Content.Text}
 
 		case "tool_use":
-			span.Name, span.Type, span.Input, span.Output, span.Usage, span.Error = processToolUse(p, toolResults, taskResults)
+			processToolUse(&span, p, toolResults, taskResults)
 
 		default:
 			continue
@@ -400,81 +408,76 @@ func processTranscriptEntries(traceID string, entries []TranscriptEntry, parentS
 	return spans
 }
 
-func processToolUse(p ParsedEntry, toolResults map[string]*ToolResultInfo, taskResults map[string]*ToolUseResult) (name, typ string, input, output map[string]interface{}, usage map[string]int, spanErr *SpanError) {
-	name = p.Content.Name
-	if name == "" {
-		name = "Tool"
+func processToolUse(span *Span, p ParsedEntry, toolResults map[string]*ToolResultInfo, taskResults map[string]*ToolUseResult) {
+	span.Name = p.Content.Name
+	if span.Name == "" {
+		span.Name = "Tool"
 	}
-	typ = "tool"
+	span.Type = "tool"
+	span.Input = p.Content.Input
 	toolID := p.Content.ID
-	input = p.Content.Input
 
-	switch name {
+	switch span.Name {
 	case "Edit":
 		if config.Truncate {
-			input = map[string]interface{}{
-				"file_path":  input["file_path"],
+			span.Input = map[string]interface{}{
+				"file_path":  span.Input["file_path"],
 				"old_string": truncateMsg,
 				"new_string": truncateMsg,
 			}
 		}
-		output = map[string]interface{}{"result": truncateMsg}
+		span.Output = map[string]interface{}{"result": truncateMsg}
 
 	case "Write":
 		if config.Truncate {
-			input = map[string]interface{}{
-				"file_path": input["file_path"],
+			span.Input = map[string]interface{}{
+				"file_path": span.Input["file_path"],
 				"content":   truncateMsg,
 			}
 		}
-		output = map[string]interface{}{"result": truncateMsg}
+		span.Output = map[string]interface{}{"result": truncateMsg}
 
 	case "Read":
-		output = map[string]interface{}{"result": truncateMsg}
+		span.Output = map[string]interface{}{"result": truncateMsg}
 
 	case "Task":
 		subType := "Task"
-		if st, ok := input["subagent_type"].(string); ok && st != "" {
+		if st, ok := span.Input["subagent_type"].(string); ok && st != "" {
 			subType = st
 		}
-		name = subType + " Subagent"
+		span.Name = subType + " Subagent"
 
 		prompt := ""
-		if pr, ok := input["prompt"].(string); ok {
+		if pr, ok := span.Input["prompt"].(string); ok {
 			prompt = pr
 		}
-		input = map[string]interface{}{"prompt": prompt}
+		span.Input = map[string]interface{}{"prompt": prompt}
 
 		if result, ok := taskResults[toolID]; ok && result != nil {
 			resp := ""
 			if len(result.Content) > 0 {
 				resp = result.Content[0].Text
 			}
-			output = map[string]interface{}{"response": resp}
+			span.Output = map[string]interface{}{"response": resp}
 			if result.TotalTokens > 0 {
-				usage = map[string]int{"total_tokens": result.TotalTokens}
+				span.Usage = map[string]int{"total_tokens": result.TotalTokens}
 			}
 		} else {
-			output = map[string]interface{}{}
+			span.Output = map[string]interface{}{}
 		}
 
 	default:
 		if result, ok := toolResults[toolID]; ok && result != nil {
-			output = map[string]interface{}{"result": result.Result}
-
-			// Check if tool result indicates an error
+			span.Output = map[string]interface{}{"result": result.Result}
 			if result.IsError {
-				spanErr = categorizeError(result.Result)
+				span.Error = categorizeError(result.Result)
 			}
 		} else {
-			output = map[string]interface{}{}
+			span.Output = map[string]interface{}{}
 		}
 	}
-
-	return name, typ, input, output, usage, spanErr
 }
 
-// categorizeError analyzes error messages and returns categorized error info
 func categorizeError(errMsg string) *SpanError {
 	errType := "tool_error"
 
@@ -496,23 +499,23 @@ func categorizeError(errMsg string) *SpanError {
 	}
 }
 
-// containsAny checks if s contains any of the substrings (case-insensitive)
+// containsAny reports whether s contains any of the given lowercase substrings.
 func containsAny(s string, substrs ...string) bool {
 	lower := strings.ToLower(s)
 	for _, sub := range substrs {
-		if strings.Contains(lower, strings.ToLower(sub)) {
+		if strings.Contains(lower, sub) {
 			return true
 		}
 	}
 	return false
 }
 
-// truncateString truncates a string to maxLen characters
 func truncateString(s string, maxLen int) string {
-	if len(s) <= maxLen {
+	runes := []rune(s)
+	if len(runes) <= maxLen {
 		return s
 	}
-	return s[:maxLen] + "..."
+	return string(runes[:maxLen]) + "..."
 }
 
 func getLastOutput(state *State) string {
@@ -572,10 +575,15 @@ func debugLog(format string, args ...interface{}) {
 
 	info, err := f.Stat()
 	if err == nil && info.Size() > maxLogFileSize {
-		f.Truncate(0)
-		f.Seek(0, 0)
+		if err := f.Truncate(0); err != nil {
+			return
+		}
+		if _, err := f.Seek(0, 0); err != nil {
+			return
+		}
 	}
 
 	ts := time.Now().Format("15:04:05")
-	fmt.Fprintf(f, "[%s] %s\n", ts, fmt.Sprintf(format, args...))
+	fmt.Fprintf(f, "[%s] ", ts)
+	fmt.Fprintf(f, format+"\n", args...)
 }
