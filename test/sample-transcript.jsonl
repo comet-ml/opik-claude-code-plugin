@@ -1,0 +1,6 @@
+{"type":"user","uuid":"user-001","timestamp":"2024-01-15T10:00:00.000Z","message":{"content":[{"type":"text","text":"Hello, can you help me?"}]}}
+{"type":"assistant","uuid":"assist-001","timestamp":"2024-01-15T10:00:01.000Z","slug":"test-conversation","message":{"content":[{"type":"thinking","thinking":"Let me think about this request..."}],"usage":{"input_tokens":100,"output_tokens":50,"cache_creation_input_tokens":0},"model":"claude-sonnet-4-20250514"}}
+{"type":"assistant","uuid":"assist-002","timestamp":"2024-01-15T10:00:02.000Z","message":{"content":[{"type":"text","text":"Of course! I'd be happy to help you."}],"usage":{"input_tokens":100,"output_tokens":20,"cache_creation_input_tokens":0},"model":"claude-sonnet-4-20250514"}}
+{"type":"assistant","uuid":"assist-003","timestamp":"2024-01-15T10:00:03.000Z","message":{"content":[{"type":"tool_use","id":"tool-001","name":"Read","input":{"file_path":"/tmp/test.txt"}}],"model":"claude-sonnet-4-20250514"}}
+{"type":"user","uuid":"user-002","timestamp":"2024-01-15T10:00:04.000Z","message":{"content":[{"type":"tool_result","tool_use_id":"tool-001","content":"File contents here"}]}}
+{"type":"assistant","uuid":"assist-004","timestamp":"2024-01-15T10:00:05.000Z","message":{"content":[{"type":"text","text":"I've read the file for you."}],"model":"claude-sonnet-4-20250514"}}

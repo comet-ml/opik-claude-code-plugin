@@ -1,7 +1,7 @@
 BINARY=opik-logger
 PLATFORMS=darwin/arm64 darwin/amd64 linux/amd64 windows/amd64
 
-.PHONY: build clean test build-local
+.PHONY: build clean build-local e2e integration
 
 build:
 	@mkdir -p bin
@@ -21,5 +21,8 @@ build-local:
 clean:
 	rm -rf bin/
 
-test:
-	go test ./src/...
+e2e:
+	./test/e2e-test.sh
+
+integration:
+	./test/integration-test.sh

@@ -17,7 +17,8 @@
     "agent-ops",
     "llm-ops"
   ],
-  "hooks": "./hooks/hooks.json",
-  "skills": "./skills",
-  "agents": "./agents"
+  "skills": ["./skills/"],
+  "agents": [
+    "./agents/agent-reviewer.md"
+  ]
 }
