@@ -13,6 +13,49 @@ Building production-grade agents requires:
 
 Before evaluating, make your agent's behavior transparent.
 
+### Critical: Trace from Input
+
+**Tracing must start at the agent entry point, before any processing begins.** This ensures:
+- The exact input is captured as received
+- Traces can be replayed for debugging
+- Full execution context is preserved
+
+```python
+import opik
+
+# ✅ CORRECT: @track on the entry point captures the original input
+@opik.track(name="research_agent")
+def agent(query: str) -> str:
+    """Entry point - trace starts here with exact input"""
+    plan = plan_action(query)
+    results = execute_tool(plan)
+    return generate_response(query, results)
+
+# ❌ WRONG: Starting trace after preprocessing loses original input
+def agent(query: str) -> str:
+    processed = preprocess(query)  # Input transformation lost!
+    return _traced_agent(processed)  # Trace misses original query
+```
+
+### Enabling Replay
+
+For traces to support replay (re-running from a trace for debugging):
+
+```python
+@opik.track(name="research_agent")
+def agent(query: str, config: dict = None) -> str:
+    # Capture config/env state that affects execution
+    opik.opik_context.update_current_trace(
+        metadata={
+            "config": config,
+            "feature_flags": get_feature_flags(),
+            "model_version": MODEL_VERSION
+        }
+    )
+    # Now the trace has everything needed for replay
+    return execute_agent(query, config)
+```
+
 ### Basic Agent Tracing
 
 ```python
@@ -290,15 +333,199 @@ class RoutingAccuracy(BaseMetric):
         )
 ```
 
+## Reliability Patterns
+
+### Idempotency
+
+Ensure operations can be safely retried:
+
+```python
+@opik.track(type="tool")
+def create_order(order_data: dict, idempotency_key: str) -> dict:
+    """Tool with idempotency key for safe retries"""
+    # Check if already processed
+    existing = db.get_order_by_idempotency_key(idempotency_key)
+    if existing:
+        return existing
+
+    # Process and store with key
+    order = process_order(order_data)
+    order["idempotency_key"] = idempotency_key
+    db.save_order(order)
+    return order
+```
+
+### Retry with Backoff
+
+```python
+import time
+import random
+
+def retry_with_backoff(func, max_attempts=3, base_delay=1.0):
+    """Exponential backoff with jitter"""
+    for attempt in range(max_attempts):
+        try:
+            return func()
+        except TransientError as e:
+            if attempt == max_attempts - 1:
+                raise
+            delay = base_delay * (2 ** attempt) + random.uniform(0, 1)
+            time.sleep(delay)
+```
+
+### Circuit Breaker
+
+```python
+class CircuitBreaker:
+    def __init__(self, failure_threshold=5, recovery_time=60):
+        self.failures = 0
+        self.threshold = failure_threshold
+        self.recovery_time = recovery_time
+        self.last_failure = None
+        self.state = "closed"  # closed, open, half-open
+
+    def call(self, func):
+        if self.state == "open":
+            if time.time() - self.last_failure > self.recovery_time:
+                self.state = "half-open"
+            else:
+                raise CircuitOpenError("Circuit breaker is open")
+
+        try:
+            result = func()
+            if self.state == "half-open":
+                self.state = "closed"
+                self.failures = 0
+            return result
+        except Exception as e:
+            self.failures += 1
+            self.last_failure = time.time()
+            if self.failures >= self.threshold:
+                self.state = "open"
+            raise
+```
+
+## Security Patterns
+
+### Input Validation
+
+```python
+@opik.track(name="secure_agent")
+def agent(query: str) -> str:
+    # Validate input before processing
+    if not is_safe_input(query):
+        return "I cannot process that request."
+
+    # Sanitize external content
+    context = retrieve_context(query)
+    sanitized_context = sanitize_external_content(context)
+
+    return generate_response(query, sanitized_context)
+
+def sanitize_external_content(content: str) -> str:
+    """Remove potential prompt injection from retrieved content"""
+    # Strip instruction-like patterns from external data
+    patterns = [r"ignore previous", r"system:", r"<\|.*\|>"]
+    for pattern in patterns:
+        content = re.sub(pattern, "", content, flags=re.IGNORECASE)
+    return content
+```
+
+### Tool Permission Boundaries
+
+```python
+# Define allowed tools per context
+TOOL_PERMISSIONS = {
+    "read_only": ["search", "get_info", "list_items"],
+    "write": ["search", "get_info", "list_items", "create", "update"],
+    "admin": ["search", "get_info", "list_items", "create", "update", "delete"]
+}
+
+@opik.track(name="permission_aware_agent")
+def agent(query: str, permission_level: str = "read_only") -> str:
+    allowed_tools = TOOL_PERMISSIONS[permission_level]
+
+    # Pass allowed tools to agent, reject others
+    return execute_with_tools(query, allowed_tools)
+```
+
+## Resource Management
+
+### Token Budgets
+
+```python
+@opik.track(name="budget_aware_agent")
+def agent(query: str, max_tokens: int = 10000) -> str:
+    tokens_used = 0
+
+    while not done and tokens_used < max_tokens:
+        response, tokens = llm_call_with_count(prompt)
+        tokens_used += tokens
+
+        if tokens_used > max_tokens * 0.9:
+            # Approaching limit, wrap up
+            return generate_summary(partial_results)
+
+    opik.opik_context.update_current_trace(
+        metadata={"tokens_used": tokens_used}
+    )
+    return final_response
+```
+
+### Execution Limits
+
+```python
+MAX_STEPS = 20
+MAX_TOOL_CALLS = 10
+
+@opik.track(name="bounded_agent")
+def agent(query: str) -> str:
+    steps = 0
+    tool_calls = 0
+
+    while not done:
+        steps += 1
+        if steps > MAX_STEPS:
+            return "Reached maximum steps, returning partial result."
+
+        action = plan_next_action()
+        if action["type"] == "tool":
+            tool_calls += 1
+            if tool_calls > MAX_TOOL_CALLS:
+                return "Reached tool call limit."
+            execute_tool(action)
+```
+
 ## Common Anti-Patterns
 
-### What to Watch For
+### Reliability Anti-Patterns
 
-1. **Tool loops**: Agent repeatedly calls same tool
-2. **Hallucinated tools**: Agent invents non-existent tools
-3. **Parameter errors**: Wrong types or missing required params
-4. **Inefficient paths**: Taking more steps than necessary
-5. **Context loss**: Forgetting information across turns
+1. **Unbounded loops**: No maximum steps or circuit breaker
+2. **Tool loops**: Agent repeatedly calls same tool without progress
+3. **Retry storms**: Cascading failures causing exponential retries
+4. **No backoff**: Immediate retries overwhelming services
+5. **Silent failures**: Errors swallowed without logging
+
+### Security Anti-Patterns
+
+6. **Prompt injection**: User input directly in system prompts
+7. **Indirect injection**: External content (web, docs) unsanitized
+8. **Privilege escalation**: Agent accessing tools beyond scope
+9. **Data leakage**: Sensitive info in logs or responses
+
+### Observability Anti-Patterns
+
+10. **Late tracing**: Trace starts after agent begins, missing input
+11. **Input mismatch**: Trace input differs from actual input (breaks replay)
+12. **Orphaned spans**: Spans without parent trace
+
+### Tool Anti-Patterns
+
+13. **Tool loops**: Agent repeatedly calls same tool
+14. **Hallucinated tools**: Agent invents non-existent tools
+15. **Parameter errors**: Wrong types or missing required params
+16. **Inefficient paths**: Taking more steps than necessary
+17. **Context loss**: Forgetting information across turns
 
 ### Detection Metrics
 
@@ -357,9 +584,10 @@ In the Opik UI:
 
 ### Observability
 
-- Trace all agent components
-- Use appropriate span types
-- Add metadata for filtering
+- **Trace from input**: Start tracing at agent entry point, not after processing
+- **Capture for replay**: Include config, feature flags, model versions in trace metadata
+- Trace all agent components with appropriate span types
+- Add metadata for filtering and debugging
 - Include tool parameters and results
 
 ### Evaluation
@@ -368,6 +596,31 @@ In the Opik UI:
 - Add component-level as needed
 - Build datasets from production failures
 - Run evaluations before deploying changes
+- Detect anti-patterns (loops, hallucinations) with custom metrics
+
+### Reliability
+
+- **Idempotency**: Use idempotency keys for all mutating operations
+- **Retries**: Exponential backoff with jitter, capped attempts
+- **Circuit breakers**: Prevent cascade failures to downstream services
+- **Timeouts**: Set per-call and total execution timeouts
+- **Graceful degradation**: Return partial results when limits reached
+
+### Security
+
+- Validate and sanitize all inputs at agent boundary
+- Sanitize external content (retrieved docs, web pages) before processing
+- Apply least-privilege tool access based on context
+- Never log sensitive data (PII, credentials)
+- Protect against indirect prompt injection
+
+### Resource Management
+
+- Set token budgets per request and session
+- Limit maximum steps and tool calls
+- Cache repeated queries
+- Use appropriate model size for task complexity
+- Monitor costs and set alerts
 
 ### Optimization
 

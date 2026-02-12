@@ -172,7 +172,3 @@ opik-claude-plugin/
 make build        # Build for all platforms
 make build-local  # Build for current platform only
 ```
-
-## License
-
-Apache-2.0
