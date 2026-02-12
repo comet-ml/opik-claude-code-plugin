@@ -35,6 +35,8 @@ Or from within Claude Code:
 /install github:comet-ml/opik-claude-plugin
 ```
 
+**Important:** Restart any running Claude Code sessions after installation. Hooks only load when a session starts.
+
 ## Configuration
 
 Run the Opik CLI to configure your connection:
@@ -107,17 +109,21 @@ Copy-ready configurations are available in `mcp-configs/mcp-servers.json`.
 ### `/opik` - Control Tracing
 
 ```bash
-/opik start tracing           # Enable tracing for this project
-/opik stop tracing            # Disable tracing for this project
-/opik status                  # Check current tracing status
+/opik start tracing                 # Enable tracing for this project
+/opik start tracing --debug         # Enable tracing + debug logging
+/opik stop tracing                  # Disable tracing for this project
+/opik status                        # Check current tracing status
 
-/opik start tracing --global  # Enable tracing for all projects
-/opik stop tracing --global   # Disable tracing globally
+/opik start tracing --global        # Enable tracing for all projects
+/opik stop tracing --global         # Disable tracing globally
 ```
 
 Tracing state is stored in `.claude/.opik-tracing-enabled` (project) or `~/.claude/.opik-tracing-enabled` (global). Project settings take precedence.
 
-**Note**: Changes affect new sessions only.
+- File exists → tracing enabled
+- File contains `debug` → tracing + debug logging to `$TMPDIR/opik-debug.log`
+
+**Note:** Restart Claude Code sessions for changes to take effect.
 
 ## Skills
 

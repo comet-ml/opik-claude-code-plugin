@@ -35,14 +35,16 @@ func LoadConfig() (*Config, error) {
 		return nil, nil
 	}
 
+	tracing := getTracingState()
+
 	cfg := &Config{
 		URL:           strings.TrimSuffix(url, "/") + "/v1/private",
 		Project:       "claude-code",
 		APIKey:        getEnvOrConfig("OPIK_API_KEY", fileConfig, "api_key"),
 		Workspace:     getEnvOrConfig("OPIK_WORKSPACE", fileConfig, "workspace"),
-		Debug:         os.Getenv("OPIK_CC_DEBUG") == "true",
+		Debug:         os.Getenv("OPIK_CC_DEBUG") == "true" || tracing.debug,
 		Truncate:      os.Getenv("OPIK_CC_TRUNCATE_FIELDS") != "false",
-		Enabled:       isTracingEnabled(),
+		Enabled:       tracing.enabled,
 		ParentTraceID: os.Getenv("OPIK_CC_PARENT_TRACE_ID"),
 		RootSpanID:    os.Getenv("OPIK_CC_ROOT_SPAN_ID"),
 	}
@@ -82,22 +84,40 @@ func getEnvOrConfig(envVar string, fileConfig map[string]string, configKey strin
 	return fileConfig[configKey]
 }
 
-// isTracingEnabled checks if tracing is enabled via state files.
-// Precedence: project-level > user-level > default (false)
-func isTracingEnabled() bool {
+// tracingState holds the result of checking the tracing file
+type tracingState struct {
+	enabled bool
+	debug   bool
+}
+
+// checkTracingFile checks a single tracing file and returns its state
+func checkTracingFile(path string) (tracingState, bool) {
+	if _, err := os.Stat(path); err == nil {
+		// File exists = tracing enabled
+		state := tracingState{enabled: true}
+		// Check if content is "debug"
+		if data, err := os.ReadFile(path); err == nil {
+			state.debug = strings.TrimSpace(string(data)) == "debug"
+		}
+		return state, true
+	}
+	return tracingState{}, false
+}
+
+// getTracingState checks tracing state from state files.
+// Precedence: project-level > user-level > default (disabled)
+func getTracingState() tracingState {
 	// Check project-level first (current working directory)
-	if data, err := os.ReadFile(".claude/.opik-tracing-enabled"); err == nil {
-		return strings.TrimSpace(string(data)) == "true"
+	if state, found := checkTracingFile(".claude/.opik-tracing-enabled"); found {
+		return state
 	}
 
 	// Fall back to user-level
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return false
-	}
-	if data, err := os.ReadFile(filepath.Join(homeDir, ".claude", ".opik-tracing-enabled")); err == nil {
-		return strings.TrimSpace(string(data)) == "true"
+	if homeDir, err := os.UserHomeDir(); err == nil {
+		if state, found := checkTracingFile(filepath.Join(homeDir, ".claude", ".opik-tracing-enabled")); found {
+			return state
+		}
 	}
 
-	return false
+	return tracingState{}
 }
