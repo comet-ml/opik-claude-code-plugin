@@ -50,10 +50,11 @@ This creates `~/.opik.config` with your API URL, key, and workspace.
 ### Optional Environment Variables
 
 ```bash
-export OPIK_PROJECT="claude-code"           # Project name (default: claude-code)
-export OPIK_CC_DEBUG="true"                 # Enable debug logging
+export OPIK_CC_PROJECT="my-project"         # Project name (default: claude-code)
 export OPIK_CC_TRUNCATE_FIELDS="false"      # Don't truncate large fields
 ```
+
+All plugin env vars use the `OPIK_CC_` prefix to avoid conflicts with standard Opik SDK variables.
 
 ### External Trace Linking
 
@@ -106,24 +107,39 @@ Copy-ready configurations are available in `mcp-configs/mcp-servers.json`.
 
 ## Commands
 
-### `/opik` - Control Tracing
+### `/opik session` - Claude Code Session Tracing
+
+Enable/disable automatic tracing of your Claude Code sessions to Opik.
 
 ```bash
-/opik start tracing                 # Enable tracing for this project
-/opik start tracing --debug         # Enable tracing + debug logging
-/opik stop tracing                  # Disable tracing for this project
-/opik status                        # Check current tracing status
+/opik session start                 # Enable tracing for this project
+/opik session start --debug         # Enable tracing + debug logging
+/opik session stop                  # Disable tracing for this project
+/opik session status                # Check current tracing status
 
-/opik start tracing --global        # Enable tracing for all projects
-/opik stop tracing --global         # Disable tracing globally
+/opik session start --global        # Enable tracing for all projects
+/opik session stop --global         # Disable tracing globally
 ```
 
 Tracing state is stored in `.claude/.opik-tracing-enabled` (project) or `~/.claude/.opik-tracing-enabled` (global). Project settings take precedence.
 
-- File exists → tracing enabled
-- File contains `debug` → tracing + debug logging to `$TMPDIR/opik-debug.log`
-
 **Note:** Restart Claude Code sessions for changes to take effect.
+
+### `/opik instrument` - Add Observability to Your Code
+
+Automatically detect frameworks in your code and add the correct Opik integration.
+
+```bash
+/opik instrument my_agent.py        # Add tracing to a specific file
+/opik instrument                    # Analyze current context and add tracing
+```
+
+Supports automatic detection and integration for:
+- **Python:** OpenAI, Anthropic, LangChain, LlamaIndex, CrewAI, Bedrock, Groq, LiteLLM
+- **TypeScript:** OpenAI, LangChain, Vercel AI SDK
+- **Custom code:** Adds `@opik.track` decorators or `Opik` client usage
+
+The command ensures tracing starts at your entry point (critical for replay capability) and uses the correct span types.
 
 ## Skills
 
@@ -167,7 +183,8 @@ opik-claude-plugin/
 ├── agents/
 │   └── agent-reviewer.md   # Agent review agent
 ├── commands/
-│   └── opik.md             # /opik command
+│   ├── opik-session.md     # /opik session command
+│   └── opik-instrument.md  # /opik instrument command
 └── mcp-configs/
     └── mcp-servers.json    # MCP server configurations
 ```
