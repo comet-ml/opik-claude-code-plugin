@@ -118,7 +118,7 @@ curl -X POST 'https://www.comet.com/opik/api/v1/private/spans' \
 | `trace_id` | string (UUID) | Yes | Parent trace ID |
 | `parent_span_id` | string (UUID) | No | Parent span ID (for nesting) |
 | `name` | string | Yes | Span name |
-| `type` | string | No | `general`, `llm`, `tool`, `retrieval`, `guardrail` |
+| `type` | string | No | `general`, `llm`, `tool`, `guardrail` |
 | `start_time` | string (ISO 8601) | Yes | When span started |
 | `end_time` | string (ISO 8601) | No | When span ended |
 | `input` | object | No | Input data |
@@ -144,7 +144,7 @@ curl -X POST 'https://www.comet.com/opik/api/v1/private/spans/batch' \
         "id": "span-1",
         "trace_id": "trace-1",
         "name": "retrieve-docs",
-        "type": "retrieval",
+        "type": "tool",
         "start_time": "2024-01-15T10:30:01Z",
         "end_time": "2024-01-15T10:30:02Z"
       },

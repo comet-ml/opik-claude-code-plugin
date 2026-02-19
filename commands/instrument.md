@@ -8,6 +8,7 @@ allowed-tools:
   - Glob
   - Grep
   - Skill
+  - Bash
 model: sonnet
 ---
 
@@ -30,17 +31,17 @@ First, use the Skill tool to load `agent-ops`. This gives you comprehensive know
 Read the target file(s) and identify:
 - What language (Python or TypeScript)
 - What frameworks/libraries are used (look at imports)
-- Where the entry point is (the function that receives user input)
+- Where the main function is (the function that kicks off the workflow)
 
 ## Step 3: Apply the Correct Integration
 
 Using the patterns from the skill, add the appropriate Opik integration. Key principles:
 
-1. **Trace at the entry point** - The outermost function that receives input must be traced first (critical for replay capability)
+1. **Trace key functions** - Add `@opik.track` to functions you want visibility into
 2. **Use framework integrations when available** - e.g., `track_openai()` instead of manual `@opik.track`
 3. **Don't double-wrap** - If using an integration, don't also add decorators to the same calls
-4. **Add flush for scripts** - Short-lived scripts need `client.flush()` before exit
-5. **Use correct span types** - `general`, `llm`, `tool`, `retrieval`, `guardrail`
+4. **Add flush for scripts** - Short-lived scripts need flushing before exit to ensure traces are sent. Use `opik.flush_tracker()` when using `@opik.track` decorators, or `client.flush()` when using the `Opik()` client directly. For TypeScript, use `await client.flush()`.
+5. **Use correct span types** - `general`, `llm`, `tool`, `guardrail` (these are the ONLY valid types — do NOT use `retrieval` or any other type)
 
 ## Step 4: Report Changes
 

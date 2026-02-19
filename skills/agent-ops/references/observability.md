@@ -63,8 +63,7 @@ Define clear trace boundaries that align with business operations:
 |------|-------------|---------|
 | `general` | Default for custom operations | Data processing |
 | `llm` | LLM API calls | OpenAI completion |
-| `tool` | Tool/function execution | Web search, calculator |
-| `retrieval` | Data retrieval operations | Vector DB query |
+| `tool` | Tool/function execution or data retrieval | Web search, calculator, vector DB query |
 | `guardrail` | Safety/validation checks | PII detection |
 
 ### Span Hierarchy
@@ -79,7 +78,7 @@ Trace: "Research Agent"
 │   ├── Span: "Web Search 1" (tool)
 │   └── Span: "Web Search 2" (tool)
 ├── Span: "Synthesize Results" (general)
-│   ├── Span: "Embed Documents" (retrieval)
+│   ├── Span: "Embed Documents" (tool)
 │   └── Span: "Generate Summary" (llm)
 └── Span: "Safety Check" (guardrail)
 ```

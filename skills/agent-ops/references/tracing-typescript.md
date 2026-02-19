@@ -66,7 +66,7 @@ const trace = client.trace({
 // Add a span for retrieval
 const retrievalSpan = trace.span({
   name: "retrieve-context",
-  type: "retrieval",
+  type: "tool",
   input: { query: "machine learning" },
 });
 // ... retrieval logic
@@ -221,7 +221,7 @@ const trace = client.trace({
 ```typescript
 const span = trace.span({
   name: string;              // Required: span name
-  type?: "general" | "llm" | "tool" | "retrieval" | "guardrail";
+  type?: "general" | "llm" | "tool" | "guardrail";
   input?: object;            // Input data
   output?: object;           // Output data
   metadata?: object;         // Custom metadata

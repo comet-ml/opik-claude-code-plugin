@@ -91,7 +91,7 @@ def agent(query: str) -> str:
 | Planning | `general` | Reasoning steps, decisions |
 | Tool calls | `tool` | Tool name, parameters, results |
 | LLM calls | `llm` | Prompt, response, tokens |
-| Retrieval | `retrieval` | Query, documents |
+| Retrieval | `tool` | Query, documents |
 | Validation | `guardrail` | Check results, pass/fail |
 
 ## Evaluating Agents

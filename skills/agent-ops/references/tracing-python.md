@@ -36,7 +36,7 @@ import opik
 
 @opik.track(
     name="custom_operation_name",  # Override function name
-    type="llm",                    # Span type: general, llm, tool, retrieval, guardrail
+    type="llm",                    # Span type: general, llm, tool, guardrail
     project_name="my-project",     # Override project
     tags=["production", "v2"],     # Add tags
     metadata={"version": "1.0"},   # Add metadata
