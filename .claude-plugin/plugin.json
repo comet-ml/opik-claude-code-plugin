@@ -17,7 +17,7 @@
     "agent-ops",
     "llm-ops"
   ],
-  "skills": ["./skills/"],
+  "skills": ["./skills/", "./commands/"],
   "agents": [
     "./agents/agent-reviewer.md"
   ]

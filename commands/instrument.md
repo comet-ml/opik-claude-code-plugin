@@ -1,5 +1,4 @@
 ---
-name: opik instrument
 description: Add Opik observability to your code - automatically detects frameworks and adds the correct integration
 argument-hint: [file or description of what to instrument]
 allowed-tools:

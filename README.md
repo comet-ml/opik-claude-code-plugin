@@ -11,7 +11,7 @@ Log Claude Code sessions to [Opik](https://github.com/comet-ml/opik) for LLM obs
 - **Agents**: Code review agent for agent architecture best practices
 
 ## How Tracing Works
-We trigger tracing for everything done in Claude Code, but don't slow you down. 
+We trigger tracing for everything done in Claude Code, but don't slow you down.
 
 ```
 User submits prompt  →  UserPromptSubmit hook  →  CREATE TRACE
@@ -25,14 +25,25 @@ Each conversation turn becomes an Opik trace. Tool calls, thoughts, and response
 
 ## Installation
 
-```bash
-claude plugins add github:comet-ml/opik-claude-plugin
-```
-
-Or from within Claude Code:
+From within Claude Code:
 
 ```
-/install github:comet-ml/opik-claude-plugin
+/plugin marketplace add github:comet-ml/opik-claude-plugin
+```
+
+Then install the plugin:
+
+```
+/plugin install opik
+```
+
+### Local Install (for contributors)
+
+If you've cloned the repo locally, add it as a marketplace and install from there:
+
+```
+/plugin marketplace add /path/to/opik-claude-plugin
+/plugin install opik
 ```
 
 **Important:** Restart any running Claude Code sessions after installation. Hooks only load when a session starts.
@@ -42,6 +53,7 @@ Or from within Claude Code:
 Run the Opik CLI to configure your connection:
 
 ```bash
+pip install opik
 opik configure
 ```
 
@@ -107,31 +119,31 @@ Copy-ready configurations are available in `mcp-configs/mcp-servers.json`.
 
 ## Commands
 
-### `/opik session` - Claude Code Session Tracing
+### `/opik:trace-claude-code` - Claude Code Session Tracing
 
 Enable/disable automatic tracing of your Claude Code sessions to Opik.
 
-```bash
-/opik session start                 # Enable tracing for this project
-/opik session start --debug         # Enable tracing + debug logging
-/opik session stop                  # Disable tracing for this project
-/opik session status                # Check current tracing status
+```
+/opik:trace-claude-code start                 # Enable tracing for this project
+/opik:trace-claude-code start --debug         # Enable tracing + debug logging
+/opik:trace-claude-code stop                  # Disable tracing for this project
+/opik:trace-claude-code status                # Check current tracing status
 
-/opik session start --global        # Enable tracing for all projects
-/opik session stop --global         # Disable tracing globally
+/opik:trace-claude-code start --global        # Enable tracing for all projects
+/opik:trace-claude-code stop --global         # Disable tracing globally
 ```
 
 Tracing state is stored in `.claude/.opik-tracing-enabled` (project) or `~/.claude/.opik-tracing-enabled` (global). Project settings take precedence.
 
 **Note:** Restart Claude Code sessions for changes to take effect.
 
-### `/opik instrument` - Add Observability to Your Code
+### `/opik:instrument` - Add Observability to Your Code
 
 Automatically detect frameworks in your code and add the correct Opik integration.
 
-```bash
-/opik instrument my_agent.py        # Add tracing to a specific file
-/opik instrument                    # Analyze current context and add tracing
+```
+/opik:instrument my_agent.py        # Add tracing to a specific file
+/opik:instrument                    # Analyze current context and add tracing
 ```
 
 Supports automatic detection and integration for:
@@ -143,7 +155,7 @@ The command ensures tracing starts at your entry point (critical for replay capa
 
 ## Skills
 
-### `/agent-ops` - LLM Observability Knowledge
+### `/opik:agent-ops` - LLM Observability Knowledge
 
 Comprehensive guidance on:
 - Opik setup and configuration
@@ -169,7 +181,7 @@ Reviews agent code for:
 opik-claude-plugin/
 ├── .claude-plugin/
 │   ├── plugin.json         # Plugin manifest
-│   └── marketplace.json    # Marketplace definition (source: "./")
+│   └── marketplace.json    # Marketplace definition
 ├── hooks/
 │   └── hooks.json          # Hook configuration
 ├── scripts/
@@ -183,8 +195,8 @@ opik-claude-plugin/
 ├── agents/
 │   └── agent-reviewer.md   # Agent review agent
 ├── commands/
-│   ├── opik-session.md     # /opik session command
-│   └── opik-instrument.md  # /opik instrument command
+│   ├── trace-claude-code.md  # /opik:trace-claude-code command
+│   └── instrument.md         # /opik:instrument command
 └── mcp-configs/
     └── mcp-servers.json    # MCP server configurations
 ```

@@ -1,5 +1,4 @@
 ---
-name: opik session
 description: Control Opik tracing for your Claude Code sessions
 argument-hint: [start|stop|status] [--global] [--debug]
 allowed-tools:
