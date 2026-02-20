@@ -21,8 +21,6 @@ type Config struct {
 
 const truncateMsg = "[ TRUNCATED -- set OPIK_CC_TRUNCATE_FIELDS=false ]"
 
-// LoadConfig loads configuration from environment variables and ~/.opik.config.
-// Returns (nil, nil) if OPIK_BASE_URL is not set (plugin disabled).
 func LoadConfig() (*Config, error) {
 	homeDir, _ := os.UserHomeDir()
 	var fileConfig map[string]string
@@ -84,18 +82,14 @@ func getEnvOrConfig(envVar string, fileConfig map[string]string, configKey strin
 	return fileConfig[configKey]
 }
 
-// tracingState holds the result of checking the tracing file
 type tracingState struct {
 	enabled bool
 	debug   bool
 }
 
-// checkTracingFile checks a single tracing file and returns its state
 func checkTracingFile(path string) (tracingState, bool) {
 	if _, err := os.Stat(path); err == nil {
-		// File exists = tracing enabled
 		state := tracingState{enabled: true}
-		// Check if content is "debug"
 		if data, err := os.ReadFile(path); err == nil {
 			state.debug = strings.TrimSpace(string(data)) == "debug"
 		}
@@ -104,17 +98,9 @@ func checkTracingFile(path string) (tracingState, bool) {
 	return tracingState{}, false
 }
 
-// getTracingState checks tracing state from state files.
-// Precedence: project-level > user-level > default (disabled)
 func getTracingState() tracingState {
-	// Check project-level first (current working directory)
-	if state, found := checkTracingFile(".claude/.opik-tracing-enabled"); found {
-		return state
-	}
-
-	// Fall back to user-level
-	if homeDir, err := os.UserHomeDir(); err == nil {
-		if state, found := checkTracingFile(filepath.Join(homeDir, ".claude", ".opik-tracing-enabled")); found {
+	if projectDir := os.Getenv("CLAUDE_PROJECT_DIR"); projectDir != "" {
+		if state, found := checkTracingFile(filepath.Join(projectDir, ".claude", ".opik-tracing-enabled")); found {
 			return state
 		}
 	}

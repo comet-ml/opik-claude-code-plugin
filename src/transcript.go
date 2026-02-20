@@ -6,7 +6,6 @@ import (
 	"os"
 )
 
-// TranscriptEntry represents a single entry in the transcript JSONL
 type TranscriptEntry struct {
 	Type          string         `json:"type"`
 	UUID          string         `json:"uuid"`
@@ -16,14 +15,13 @@ type TranscriptEntry struct {
 	ToolUseResult *ToolUseResult `json:"toolUseResult,omitempty"`
 }
 
-// Message represents the message field in a transcript entry
 type Message struct {
+	ID      string    `json:"id,omitempty"`
 	Content []Content `json:"content"`
 	Usage   *Usage    `json:"usage,omitempty"`
 	Model   string    `json:"model,omitempty"`
 }
 
-// Content represents a content block in a message
 type Content struct {
 	Type      string                 `json:"type"`
 	ID        string                 `json:"id,omitempty"`
@@ -36,25 +34,22 @@ type Content struct {
 	IsError   bool                   `json:"is_error,omitempty"`
 }
 
-// Usage represents token usage
 type Usage struct {
 	InputTokens              int `json:"input_tokens"`
 	OutputTokens             int `json:"output_tokens"`
 	CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+	CacheReadInputTokens     int `json:"cache_read_input_tokens"`
 }
 
-// ToolUseResult represents task result data
 type ToolUseResult struct {
 	Content     []ResultContent `json:"content,omitempty"`
 	TotalTokens int             `json:"totalTokens,omitempty"`
 }
 
-// ResultContent represents content in a tool use result
 type ResultContent struct {
 	Text string `json:"text,omitempty"`
 }
 
-// ParsedEntry holds parsed data for span generation
 type ParsedEntry struct {
 	UUID        string
 	Timestamp   string
@@ -62,16 +57,15 @@ type ParsedEntry struct {
 	Content     Content
 	Usage       *Usage
 	Model       string
+	MessageID   string
 }
 
-// ToolResultInfo holds tool result data including error info and timestamp
 type ToolResultInfo struct {
 	Result    string
 	IsError   bool
 	Timestamp string
 }
 
-// ReadTranscript reads and parses a transcript file from a given line offset
 func ReadTranscript(path string, startLine int) ([]TranscriptEntry, error) {
 	file, err := os.Open(path)
 	if err != nil {
@@ -81,7 +75,6 @@ func ReadTranscript(path string, startLine int) ([]TranscriptEntry, error) {
 
 	var entries []TranscriptEntry
 	scanner := bufio.NewScanner(file)
-	// Increase buffer size for large lines
 	buf := make([]byte, 0, initialBufferSize)
 	scanner.Buffer(buf, maxBufferSize)
 
@@ -102,7 +95,6 @@ func ReadTranscript(path string, startLine int) ([]TranscriptEntry, error) {
 	return entries, scanner.Err()
 }
 
-// BuildToolResults builds a map of tool_use_id -> ToolResultInfo from user messages
 func BuildToolResults(entries []TranscriptEntry) map[string]*ToolResultInfo {
 	results := make(map[string]*ToolResultInfo)
 
@@ -127,7 +119,6 @@ func BuildToolResults(entries []TranscriptEntry) map[string]*ToolResultInfo {
 	return results
 }
 
-// BuildTaskResults builds a map of tool_use_id -> ToolUseResult from user messages
 func BuildTaskResults(entries []TranscriptEntry) map[string]*ToolUseResult {
 	results := make(map[string]*ToolUseResult)
 
@@ -143,7 +134,6 @@ func BuildTaskResults(entries []TranscriptEntry) map[string]*ToolUseResult {
 	return results
 }
 
-// ParseAssistantMessages extracts parsed entries from assistant messages
 func ParseAssistantMessages(entries []TranscriptEntry) []ParsedEntry {
 	var parsed []ParsedEntry
 
@@ -164,13 +154,49 @@ func ParseAssistantMessages(entries []TranscriptEntry) []ParsedEntry {
 			Content:     content,
 			Usage:       entry.Message.Usage,
 			Model:       entry.Message.Model,
+			MessageID:   entry.Message.ID,
 		})
 	}
 
 	return parsed
 }
 
-// FindModel extracts the model name from transcript entries
+func DeduplicateUsage(parsed []ParsedEntry) {
+	type group struct {
+		indices []int
+	}
+	groups := make(map[string]*group)
+	var order []string
+
+	for i := range parsed {
+		mid := parsed[i].MessageID
+		if mid == "" {
+			continue
+		}
+		g, exists := groups[mid]
+		if !exists {
+			g = &group{}
+			groups[mid] = g
+			order = append(order, mid)
+		}
+		g.indices = append(g.indices, i)
+	}
+
+	for _, mid := range order {
+		g := groups[mid]
+		if len(g.indices) < 2 {
+			continue
+		}
+		lastIdx := g.indices[len(g.indices)-1]
+		finalUsage := parsed[lastIdx].Usage
+
+		parsed[g.indices[0]].Usage = finalUsage
+		for _, idx := range g.indices[1:] {
+			parsed[idx].Usage = nil
+		}
+	}
+}
+
 func FindModel(entries []TranscriptEntry) string {
 	for _, entry := range entries {
 		if entry.Type == "assistant" && entry.Message != nil && entry.Message.Model != "" {

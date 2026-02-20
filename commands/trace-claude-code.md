@@ -1,6 +1,6 @@
 ---
 description: Control Opik tracing for your Claude Code sessions
-argument-hint: [start|stop|status] [--global] [--debug]
+argument-hint: [start|stop|status] [--debug]
 allowed-tools:
   - Bash
   - Read
@@ -16,10 +16,7 @@ Based on the user's request: **$ARGUMENTS**
 
 ## Scope
 
-- **Project-level** (default): `.claude/.opik-tracing-enabled` in the current working directory
-- **User-level** (with `--global` flag): `~/.claude/.opik-tracing-enabled`
-
-Project-level settings take precedence over user-level settings.
+Tracing is configured per-project via `.claude/.opik-tracing-enabled` in the project directory.
 
 ## File Semantics
 
@@ -30,34 +27,26 @@ Project-level settings take precedence over user-level settings.
 ## Actions
 
 **If the request contains "start":**
-- Determine scope: global (`~/.claude/`) or project (`.claude/`)
-- Create the directory if needed with `mkdir -p`
-- If `--debug` is present, write `debug` to the file
+- Create `.claude/` directory if needed with `mkdir -p`
+- If `--debug` is present, write `debug` to `.claude/.opik-tracing-enabled`
 - Otherwise, touch/create the file (content doesn't matter)
-- Confirm: "Opik session tracing enabled. Restart Claude Code for changes to take effect."
+- Confirm: "Opik session tracing enabled for this project. Takes effect immediately for new conversation turns."
 
 **If the request contains "stop":**
-- Determine scope: global (`~/.claude/`) or project (`.claude/`)
-- Delete the `.opik-tracing-enabled` file
-- Confirm: "Opik session tracing disabled."
+- Delete `.claude/.opik-tracing-enabled`
+- Confirm: "Opik session tracing disabled for this project."
 
 **If the request is "status":**
-1. Check if `.claude/.opik-tracing-enabled` exists in current directory (project-level)
-2. Check if `~/.claude/.opik-tracing-enabled` exists (user-level)
-3. Report both settings and the effective state:
-   - "Project: [enabled/enabled+debug/disabled/not set]"
-   - "Global: [enabled/enabled+debug/disabled/not set]"
-   - "Effective: [enabled/disabled] (project takes precedence if set)"
+1. Check if `.claude/.opik-tracing-enabled` exists in current directory
+2. Report state: "Tracing: [enabled/enabled+debug/disabled]"
 
 ## Examples
 
 ```
-/opik session start              # Enable session tracing for this project
-/opik session start --debug      # Enable tracing + debug logging
-/opik session start --global     # Enable tracing globally
-/opik session stop               # Disable tracing for this project
-/opik session stop --global      # Disable tracing globally
-/opik session status             # Check current state
+/opik:trace-claude-code start          # Enable session tracing for this project
+/opik:trace-claude-code start --debug  # Enable tracing + debug logging
+/opik:trace-claude-code stop           # Disable tracing for this project
+/opik:trace-claude-code status         # Check current state
 ```
 
 ## What This Does
@@ -71,6 +60,6 @@ View your traces at: https://www.comet.com/opik
 
 ## Notes
 
-- Changes affect NEW sessions only - restart Claude Code for changes to take effect
+- Changes take effect immediately for new conversation turns (no restart needed)
 - Debug logs are written to `$TMPDIR/opik-debug.log`
 - Requires Opik configuration (`opik configure` or env vars)

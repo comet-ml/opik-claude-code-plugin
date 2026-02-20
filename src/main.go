@@ -18,7 +18,6 @@ const (
 	flushInterval     = 5 * time.Second
 )
 
-// HookInput represents the input received from Claude Code hooks
 type HookInput struct {
 	HookEventName       string `json:"hook_event_name"`
 	SessionID           string `json:"session_id"`
@@ -26,7 +25,8 @@ type HookInput struct {
 	Prompt              string `json:"prompt"`
 	AgentID             string `json:"agent_id"`
 	AgentType           string `json:"agent_type"`
-	AgentTranscriptPath string `json:"agent_transcript_path"`
+	AgentTranscriptPath  string `json:"agent_transcript_path"`
+	CustomInstructions   string `json:"custom_instructions"`
 }
 
 var (
@@ -70,8 +70,10 @@ func main() {
 		onSubagentStart()
 	case "SubagentStop":
 		onSubagentStop()
-	case "Stop", "SessionEnd":
+	case "Stop":
 		onStop()
+	case "SessionEnd":
+		onSessionEnd()
 	case "PreCompact":
 		onCompact()
 	default:
@@ -80,17 +82,16 @@ func main() {
 }
 
 func onPrompt() {
-	// Use parent trace ID if provided via env var, otherwise generate new
+	startLine := 0
+	if input.TranscriptPath != "" {
+		startLine = countLines(input.TranscriptPath)
+	}
+
 	traceID := config.ParentTraceID
 	if traceID == "" {
 		traceID = uuid7()
 	}
 	ts := isoNow()
-
-	startLine := 0
-	if input.TranscriptPath != "" {
-		startLine = countLines(input.TranscriptPath)
-	}
 
 	state := &State{
 		TraceID:    traceID,
@@ -106,7 +107,6 @@ func onPrompt() {
 
 	debugLog("trace=%s start=%d parent=%s", traceID, startLine, config.ParentTraceID)
 
-	// Only create new trace if not using parent trace
 	if config.ParentTraceID == "" {
 		trace := Trace{
 			ID:          traceID,
@@ -142,7 +142,6 @@ func onTool() {
 }
 
 func onStop() {
-	// Brief delay to ensure transcript is fully written before reading
 	time.Sleep(100 * time.Millisecond)
 
 	state, err := LoadState(input.SessionID)
@@ -161,7 +160,6 @@ func onStop() {
 		"output":       map[string]string{"text": output},
 	}
 
-	// If slug was never sent, try one more time in the final update
 	if !state.SlugSent {
 		allEntries, err := ReadTranscript(state.Transcript, 0)
 		if err == nil {
@@ -175,37 +173,107 @@ func onStop() {
 		debugLog("update trace: %v", err)
 	}
 
-	DeleteState(input.SessionID)
 	debugLog("done")
+}
+
+func onSessionEnd() {
+	state, err := LoadState(input.SessionID)
+	if err == nil {
+		flush(state)
+		ts := isoNow()
+		finalUpdate := map[string]interface{}{
+			"project_name": config.Project,
+			"end_time":     ts,
+		}
+		if err := api.Patch("/traces/"+state.TraceID, finalUpdate); err != nil {
+			debugLog("session end update trace: %v", err)
+		}
+	}
+	DeleteState(input.SessionID)
+	debugLog("session ended")
 }
 
 func onCompact() {
 	state, err := LoadState(input.SessionID)
 	if err != nil {
-		debugLog("load state: %v", err)
-		return
+		debugLog("compact: no state, bootstrapping: %v", err)
+		traceID := config.ParentTraceID
+		if traceID == "" {
+			traceID = uuid7()
+		}
+		ts := isoNow()
+		state = &State{
+			TraceID:    traceID,
+			StartTime:  ts,
+			SessionID:  input.SessionID,
+			Transcript: input.TranscriptPath,
+			StartLine:  countLines(input.TranscriptPath),
+			LastFlush:  time.Now().Unix(),
+		}
+
+		if config.ParentTraceID == "" {
+			trace := Trace{
+				ID:          traceID,
+				Name:        "claude-code",
+				StartTime:   ts,
+				ProjectName: config.Project,
+				ThreadID:    input.SessionID,
+				Tags:        []string{"claude-code"},
+			}
+			if err := api.Post("/traces", trace); err != nil {
+				debugLog("compact: create trace: %v", err)
+			}
+		}
+
+		if err := SaveState(state); err != nil {
+			debugLog("save state: %v", err)
+		}
+	} else {
+		flush(state)
 	}
 
-	flush(state)
-	if err := SaveState(state); err != nil {
-		debugLog("save state: %v", err)
-	}
-
+	compactTraceID := uuid7()
 	ts := isoNow()
+	traceName := "claude-code"
+	allEntries, err := ReadTranscript(state.Transcript, 0)
+	if err == nil {
+		if slug := findSlug(allEntries); slug != "" {
+			traceName = slug
+		}
+	}
+	trace := Trace{
+		ID:          compactTraceID,
+		Name:        traceName,
+		StartTime:   ts,
+		EndTime:     ts,
+		ProjectName: config.Project,
+		ThreadID:    input.SessionID,
+		Tags:        []string{"claude-code", "compaction"},
+	}
+	if err := api.Post("/traces", trace); err != nil {
+		debugLog("compact: create trace: %v", err)
+	}
+
 	span := Span{
 		ID:          uuid7(),
-		TraceID:     state.TraceID,
+		TraceID:     compactTraceID,
 		Name:        "Compaction",
 		Type:        "general",
 		StartTime:   ts,
 		EndTime:     ts,
 		ProjectName: config.Project,
-		Input:       map[string]interface{}{"event": "context_compacted"},
+		Input:       map[string]interface{}{"text": compactInput(input.CustomInstructions)},
 		Output:      map[string]interface{}{"status": "compacted"},
 	}
-
 	if err := api.Post("/spans/batch", SpanBatch{Spans: []Span{span}}); err != nil {
 		debugLog("send compaction span: %v", err)
+	}
+
+	state.TraceID = compactTraceID
+	state.StartLine = countLines(input.TranscriptPath)
+	state.LastFlush = time.Now().Unix()
+	if err := SaveState(state); err != nil {
+		debugLog("save state: %v", err)
 	}
 }
 
@@ -282,8 +350,6 @@ func onSubagentStop() {
 }
 
 func flush(state *State) {
-	// Update trace metadata (name and model) if not already sent
-	// Do this first, reading ALL entries, before checking for new spans
 	if !state.SlugSent {
 		allEntries, err := ReadTranscript(state.Transcript, 0)
 		if err == nil && len(allEntries) > 0 {
@@ -297,7 +363,6 @@ func flush(state *State) {
 				updates["name"] = slug
 			}
 
-			// Only update model for traces we own (not parent traces)
 			if config.ParentTraceID == "" {
 				if model := FindModel(allEntries); model != "" {
 					updates["model"] = model
@@ -314,7 +379,6 @@ func flush(state *State) {
 		}
 	}
 
-	// Now process new entries for spans
 	entries, err := ReadTranscript(state.Transcript, state.StartLine)
 	if err != nil || len(entries) == 0 {
 		return
@@ -352,8 +416,8 @@ func processTranscriptEntries(traceID string, entries []TranscriptEntry, parentS
 	toolResults := BuildToolResults(entries)
 	taskResults := BuildTaskResults(entries)
 	parsed := ParseAssistantMessages(entries)
+	DeduplicateUsage(parsed)
 
-	// Use root span ID from config if provided and no explicit parent
 	effectiveParentSpanID := parentSpanID
 	if effectiveParentSpanID == "" && config.RootSpanID != "" {
 		effectiveParentSpanID = config.RootSpanID
@@ -361,13 +425,11 @@ func processTranscriptEntries(traceID string, entries []TranscriptEntry, parentS
 
 	spans := make([]Span, 0, len(parsed))
 	for i, p := range parsed {
-		// Calculate end time: use next entry's timestamp if available
 		endTime := p.Timestamp
 		if i+1 < len(parsed) {
 			endTime = parsed[i+1].Timestamp
 		}
 
-		// For tool_use, try to get end time from tool result
 		if p.ContentType == "tool_use" {
 			if result, ok := toolResults[p.Content.ID]; ok && result != nil && result.Timestamp != "" {
 				endTime = result.Timestamp
@@ -391,15 +453,6 @@ func processTranscriptEntries(traceID string, entries []TranscriptEntry, parentS
 			span.Type = "llm"
 			span.Input = map[string]interface{}{}
 			span.Output = map[string]interface{}{"thinking": p.Content.Thinking}
-			if p.Usage != nil {
-				inp := p.Usage.InputTokens + p.Usage.CacheCreationInputTokens
-				out := p.Usage.OutputTokens
-				span.Usage = map[string]int{
-					"prompt_tokens":     inp,
-					"completion_tokens": out,
-					"total_tokens":      inp + out,
-				}
-			}
 
 		case "text":
 			span.Name = "Text"
@@ -412,6 +465,22 @@ func processTranscriptEntries(traceID string, entries []TranscriptEntry, parentS
 
 		default:
 			continue
+		}
+
+		if p.Usage != nil && span.Usage == nil {
+			span.Usage = map[string]int{
+				"prompt_tokens":     p.Usage.InputTokens,
+				"completion_tokens": p.Usage.OutputTokens,
+				"total_tokens":      p.Usage.InputTokens + p.Usage.OutputTokens,
+				"original_usage.input_tokens":               p.Usage.InputTokens,
+				"original_usage.output_tokens":              p.Usage.OutputTokens,
+				"original_usage.cache_read_input_tokens":    p.Usage.CacheReadInputTokens,
+				"original_usage.cache_creation_input_tokens": p.Usage.CacheCreationInputTokens,
+			}
+			span.Provider = "anthropic"
+			if p.Model != "" {
+				span.Model = p.Model
+			}
 		}
 
 		spans = append(spans, span)
@@ -490,10 +559,16 @@ func processToolUse(span *Span, p ParsedEntry, toolResults map[string]*ToolResul
 	}
 }
 
+func compactInput(customInstructions string) string {
+	if customInstructions != "" {
+		return "/compact " + customInstructions
+	}
+	return "/compact"
+}
+
 func categorizeError(errMsg string) *SpanError {
 	errType := "tool_error"
 
-	// Categorize based on common error patterns
 	switch {
 	case containsAny(errMsg, "timeout", "timed out", "deadline exceeded"):
 		errType = "timeout"
@@ -511,7 +586,6 @@ func categorizeError(errMsg string) *SpanError {
 	}
 }
 
-// containsAny reports whether s contains any of the given lowercase substrings.
 func containsAny(s string, substrs ...string) bool {
 	lower := strings.ToLower(s)
 	for _, sub := range substrs {

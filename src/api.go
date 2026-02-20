@@ -9,7 +9,6 @@ import (
 	"time"
 )
 
-// API wraps HTTP calls to the Opik API
 type API struct {
 	config *Config
 	client *http.Client
@@ -66,7 +65,6 @@ func (a *API) request(method, endpoint string, data interface{}) error {
 	return nil
 }
 
-// Trace represents an Opik trace
 type Trace struct {
 	ID          string            `json:"id"`
 	Name        string            `json:"name"`
@@ -80,7 +78,6 @@ type Trace struct {
 	Model       string            `json:"model,omitempty"`
 }
 
-// Span represents an Opik span
 type Span struct {
 	ID           string                 `json:"id"`
 	TraceID      string                 `json:"trace_id"`
@@ -93,16 +90,17 @@ type Span struct {
 	Input        map[string]interface{} `json:"input"`
 	Output       map[string]interface{} `json:"output"`
 	Usage        map[string]int         `json:"usage,omitempty"`
+	Metadata     map[string]interface{} `json:"metadata,omitempty"`
+	Provider     string                 `json:"provider,omitempty"`
+	Model        string                 `json:"model,omitempty"`
 	Error        *SpanError             `json:"error,omitempty"`
 }
 
-// SpanError represents error information for a span
 type SpanError struct {
 	Type    string `json:"type"`
 	Message string `json:"message"`
 }
 
-// SpanBatch wraps spans for batch API calls
 type SpanBatch struct {
 	Spans []Span `json:"spans"`
 }

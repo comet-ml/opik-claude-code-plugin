@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 )
 
-// State holds the current trace state
 type State struct {
 	TraceID    string `json:"trace_id"`
 	StartTime  string `json:"start_time"`
@@ -18,7 +17,6 @@ type State struct {
 	SlugSent   bool   `json:"slug_sent,omitempty"`
 }
 
-// AgentMap maps agent IDs to their parent task UUIDs
 type AgentMap map[string]string
 
 func statePath(sessionID string) string {
