@@ -155,11 +155,23 @@ func onStop() {
 
 	output := getLastOutput(state)
 	ts := isoNow()
-	if err := api.Patch("/traces/"+state.TraceID, map[string]interface{}{
+	finalUpdate := map[string]interface{}{
 		"project_name": config.Project,
 		"end_time":     ts,
 		"output":       map[string]string{"text": output},
-	}); err != nil {
+	}
+
+	// If slug was never sent, try one more time in the final update
+	if !state.SlugSent {
+		allEntries, err := ReadTranscript(state.Transcript, 0)
+		if err == nil {
+			if slug := findSlug(allEntries); slug != "" {
+				finalUpdate["name"] = slug
+			}
+		}
+	}
+
+	if err := api.Patch("/traces/"+state.TraceID, finalUpdate); err != nil {
 		debugLog("update trace: %v", err)
 	}
 
@@ -295,7 +307,7 @@ func flush(state *State) {
 			if len(updates) > 1 { // More than just project_name
 				if err := api.Patch("/traces/"+state.TraceID, updates); err != nil {
 					debugLog("update trace metadata: %v", err)
-				} else {
+				} else if slug != "" {
 					state.SlugSent = true
 				}
 			}
