@@ -64,6 +64,7 @@ This creates `~/.opik.config` with your API URL, key, and workspace.
 ```bash
 export OPIK_CC_PROJECT="my-project"         # Project name (default: claude-code)
 export OPIK_CC_TRUNCATE_FIELDS="false"      # Don't truncate large fields
+export OPIK_CC_THREAD_ID="my-thread-123"   # Group traces into an Opik thread
 ```
 
 All plugin env vars use the `OPIK_CC_` prefix to avoid conflicts with standard Opik SDK variables.

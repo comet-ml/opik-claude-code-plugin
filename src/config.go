@@ -17,6 +17,7 @@ type Config struct {
 	Enabled       bool
 	ParentTraceID string
 	RootSpanID    string
+	ThreadID      string
 }
 
 const truncateMsg = "[ TRUNCATED -- set OPIK_CC_TRUNCATE_FIELDS=false ]"
@@ -47,6 +48,7 @@ func LoadConfig() (*Config, error) {
 		Enabled:       tracing.enabled,
 		ParentTraceID: os.Getenv("OPIK_CC_PARENT_TRACE_ID"),
 		RootSpanID:    os.Getenv("OPIK_CC_ROOT_SPAN_ID"),
+		ThreadID:      os.Getenv("OPIK_CC_THREAD_ID"),
 	}
 
 	if proj := getEnvOrConfig("OPIK_CC_PROJECT", fileConfig, "project_name"); proj != "" {

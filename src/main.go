@@ -108,12 +108,16 @@ func onPrompt() {
 
 	// Only create new trace if not using parent trace
 	if config.ParentTraceID == "" {
+		threadID := input.SessionID
+		if config.ThreadID != "" {
+			threadID = config.ThreadID
+		}
 		trace := Trace{
 			ID:          traceID,
 			Name:        "claude-code",
 			StartTime:   ts,
 			ProjectName: config.Project,
-			ThreadID:    input.SessionID,
+			ThreadID:    threadID,
 			Tags:        []string{"claude-code"},
 			Input:       map[string]string{"text": input.Prompt},
 		}
