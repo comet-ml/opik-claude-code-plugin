@@ -1,191 +1,106 @@
 ---
 name: agent-ops
-description: This skill should be used when the user asks about LLM observability, tracing, evaluation, Opik setup, agent monitoring, span creation, metrics, or debugging agent behavior. Use for questions like "how do I trace my agent", "set up Opik", "evaluate my LLM", "add observability", "monitor my agent", "debug my agent", "track LLM calls".
+description: This skill should be used when the user asks about agent architecture, evaluation, metrics, production monitoring, debugging agents, or best practices for building reliable AI agents. Use for questions like "evaluate my agent", "set up production monitoring", "add guardrails", "detect hallucinations", "agent anti-patterns", "compare experiments", "create evaluation dataset".
 ---
 
-# LLM Observability with Opik
+# Agent Operations: Build, Evaluate, and Monitor AI Agents
 
-Opik is an open-source platform for LLM observability, evaluation, and optimization. It helps you understand, debug, and improve your LLM applications through comprehensive tracing, automated evaluation, and prompt optimization.
+This skill covers the agent lifecycle beyond basic tracing: architecture patterns, evaluation, metrics, and production monitoring. All examples use Opik for observability — for SDK details (tracing, integrations, span types), load the `opik` skill.
 
-## Why LLM Observability Matters
+## The Agent Lifecycle
 
-LLM applications are complex systems that do more than just call an LLM API—they involve retrieval, pre-processing, post-processing, tool calling, and multi-step reasoning. Without observability, debugging issues, optimizing performance, and ensuring reliability becomes nearly impossible.
+1. **Instrument** — Add Opik tracing to make your agent's behavior visible (see `opik` skill)
+2. **Evaluate** — Measure performance with datasets, metrics, and experiments
+3. **Monitor** — Track quality, cost, and reliability in production
+4. **Optimize** — Improve based on data from evaluation and production traces
 
-Observability enables you to:
-- **Debug issues** by examining exactly what happened during each interaction
-- **Optimize performance** by identifying bottlenecks and slow operations
-- **Track costs** by monitoring token usage across your application
-- **Ensure quality** by reviewing outputs and detecting hallucinations or errors
-- **Iterate faster** by understanding how changes affect behavior
+## Agent Architecture Patterns
 
-## Core Concepts
+Trace every component of your agent with appropriate span types:
 
-### Traces
-A **trace** represents a complete execution path for a single interaction with an LLM or agent. It captures:
-- Unique identifier for tracking
-- Input prompts and output responses
-- Timing information (start, end, duration)
-- Metadata (model used, temperature, custom tags)
-- Token usage and cost estimates
-
-### Spans
-A **span** represents an individual operation within a trace. Spans create a hierarchical structure showing:
-- LLM calls
-- Tool/function invocations
-- Data retrieval operations
-- Custom processing steps
-
-Example hierarchy:
-```
-Trace: "Customer Support Chat"
-├── Span: "Parse User Intent"
-├── Span: "Query Knowledge Base"
-│   ├── Span: "Search Vector Database"
-│   └── Span: "Rank Results"
-├── Span: "Generate Response"
-│   ├── Span: "LLM Call: GPT-4"
-│   └── Span: "Post-process Response"
-└── Span: "Log Interaction"
-```
-
-### Threads
-A **thread** groups related traces that form a conversation or workflow. Use threads to:
-- Track multi-turn conversations
-- Maintain context across LLM calls
-- Analyze conversation patterns
-- Debug user sessions
-
-### Multimodal Tracing
-Opik supports tracing multimodal content including images, videos, audio files, and PDFs. Attach media to traces and spans for complete observability of vision and audio AI applications.
-
-### Metrics
-**Metrics** provide quantitative assessments of your LLM outputs (41 built-in metrics):
-- **Heuristic metrics**: Text similarity and validation (BLEU, ROUGE, Levenshtein, etc.)
-- **Conversation heuristic metrics**: Multi-turn conversation analysis
-- **LLM-as-Judge metrics**: Semantic evaluation (hallucination, relevance, helpfulness)
-- **Conversation LLM metrics**: Quality assessment for chat applications
-- **Agent-specific metrics**: Task completion, tool correctness, trajectory accuracy
-
-## Quick Start
-
-### Installation
-
-**Python:**
-```bash
-pip install opik
-opik configure  # Interactive setup
-```
-
-**TypeScript:**
-```bash
-npm install opik
-```
-
-Set environment variables:
-```bash
-export OPIK_API_KEY="your-api-key"
-export OPIK_URL_OVERRIDE="https://www.comet.com/opik/api"  # Cloud
-# export OPIK_URL_OVERRIDE="http://localhost:5173/api"    # Self-hosted
-export OPIK_PROJECT_NAME="my-project"
-```
-
-### Basic Tracing (Python)
-
-Using the `@opik.track` decorator:
 ```python
 import opik
 
-@opik.track
-def retrieve_context(query: str) -> list:
-    # Your retrieval logic
-    return ["context1", "context2"]
-
-@opik.track
-def generate_response(query: str, context: list) -> str:
-    # Your LLM call
-    return "Generated response"
-
-@opik.track(name="my_agent")
+@opik.track(name="research_agent")
 def agent(query: str) -> str:
-    context = retrieve_context(query)
-    return generate_response(query, context)
+    plan = plan_action(query)        # general span
+    results = execute_tool(plan)     # tool span
+    return generate_response(results) # llm span
 
-# All nested calls are automatically traced
-result = agent("What is machine learning?")
+@opik.track(type="tool")
+def execute_tool(action: dict) -> str:
+    return search_web(action["query"])
+
+@opik.track(type="llm")
+def generate_response(context: str) -> str:
+    return llm_call(context)
 ```
 
-### Basic Tracing (TypeScript)
+### What to Trace
 
-```typescript
-import { Opik } from "opik";
+| Component | Span Type | Key Data |
+|-----------|-----------|----------|
+| Planning | `general` | Reasoning steps, decisions |
+| Tool calls | `tool` | Tool name, parameters, results |
+| LLM calls | `llm` | Prompt, response, tokens |
+| Retrieval | `tool` | Query, documents |
+| Validation | `guardrail` | Check results, pass/fail |
 
-const client = new Opik();
+## Evaluation
 
-const trace = client.trace({
-  name: "my-agent",
-  input: { prompt: "Hello!" },
-});
+Evaluate agents at multiple levels — end-to-end and per-component:
 
-const span = trace.span({
-  name: "llm-call",
-  type: "llm",
-  input: { prompt: "Hello!" },
-});
-
-// Your LLM call here
-span.end({ output: { response: "Hi there!" } });
-trace.end({ output: { response: "Hi there!" } });
-
-await client.flush();
-```
-
-### Framework Integrations
-
-Opik integrates with 80+ frameworks and providers:
-
-**Python Frameworks:** AG2, Agno, Autogen, CrewAI, DSPy, Google ADK, Haystack, Instructor, LangChain, LangGraph, LiveKit Agents, LlamaIndex, Microsoft Agent Framework, OpenAI Agents, Pipecat, Pydantic AI, Semantic Kernel, Smolagents, Strands Agents, VoltAgent
-
-**TypeScript Frameworks:** BeeAI, LangChain.js, Mastra, Vercel AI SDK
-
-**Model Providers:** OpenAI, Anthropic, Bedrock, BytePlus, Cohere, DeepSeek, Fireworks AI, Gemini, Groq, Mistral, Novita AI, Ollama, Together AI, WatsonX, xAI Grok
-
-**Gateways:** Opik LLM Gateway, Kong AI Gateway, LiteLLM, OpenRouter, Portkey
-
-**No-Code:** Cursor, Dify, Flowise, Langflow, n8n, OpenWebUI
-
-**OpenTelemetry:** Python, Ruby, Java
-
-Example with OpenAI (Python):
 ```python
-from opik.integrations.openai import track_openai
-from openai import OpenAI
+from opik.evaluation import evaluate
+from opik.evaluation.metrics import AnswerRelevance, Hallucination, AgentTaskCompletion
 
-client = track_openai(OpenAI())
-# All calls are now automatically traced
-response = client.chat.completions.create(
-    model="gpt-4",
-    messages=[{"role": "user", "content": "Hello!"}]
+results = evaluate(
+    experiment_name="agent-v2",
+    dataset=dataset,
+    task=lambda item: {"output": agent(item["input"])},
+    scoring_metrics=[
+        AnswerRelevance(),
+        Hallucination(),
+        AgentTaskCompletion(),
+    ]
 )
 ```
 
-## Deployment Options
+### Built-in Agent Metrics
 
-- **Opik Cloud**: Managed service at comet.com/opik
-- **Self-hosted**: Deploy with Docker or Kubernetes
-- **Open source**: Full access to the codebase on GitHub
+| Metric | What It Measures |
+|--------|-----------------|
+| `AgentTaskCompletion` | Did the agent fulfill its task? |
+| `AgentToolCorrectness` | Were tools used correctly? |
+| `TrajectoryAccuracy` | Did actions match expected sequence? |
+| `AnswerRelevance` | Does the answer address the question? |
+| `Hallucination` | Are there unsupported claims? |
 
-## Next Steps
+### 41 Total Built-in Metrics
 
-For detailed information, refer to the reference documentation in this skill:
+Heuristic (Equals, Contains, BLEU, ROUGE, BERTScore, IsJson, etc.), LLM-as-Judge (AnswerRelevance, Hallucination, Usefulness, GEval, etc.), RAG (ContextPrecision, ContextRecall, Faithfulness), and conversation metrics. See `references/evaluation.md` for the full list.
+
+## Production Monitoring
+
+- **Dashboards** — Visualize quality, cost, latency, and error trends
+- **Online evaluation** — Automatically score production traces with LLM-as-Judge
+- **Alerts** — Get notified when metrics deviate (quality drops, cost spikes, error rates)
+- **Guardrails** — PII detection, topic validation, custom safety checks
+- **Opik Assist** — AI-powered root cause analysis for failed traces
+
+## Common Anti-Patterns
+
+| Category | Anti-Pattern |
+|----------|-------------|
+| Reliability | Unbounded loops, retry storms, silent failures |
+| Security | Prompt injection, privilege escalation, data leakage |
+| Observability | Late tracing (missing input), orphaned spans |
+| Tools | Tool loops, hallucinated tools, parameter errors |
+
+## Detailed References
 
 | Topic | Reference File |
 |-------|----------------|
-| Tracing concepts & best practices | `references/observability.md` |
-| Python SDK tracing | `references/tracing-python.md` |
-| TypeScript SDK tracing | `references/tracing-typescript.md` |
-| REST API tracing | `references/tracing-rest-api.md` |
-| Evaluation & metrics | `references/evaluation.md` |
-| Agent architecture patterns | `references/agent-patterns.md` |
-| Prompt & agent optimization | `references/optimization.md` |
-| Production monitoring | `references/production.md` |
-| Integrations reference | `references/integrations.md` |
+| Agent architecture, reliability, security patterns | `references/agent-patterns.md` |
+| Evaluation datasets, experiments, all 41 metrics | `references/evaluation.md` |
+| Production dashboards, alerts, guardrails, cost tracking | `references/production.md` |
