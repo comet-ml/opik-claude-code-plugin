@@ -147,6 +147,21 @@ For more control, use context managers:
 ### Trace Context Manager
 
 ```python
+# Signature:
+# opik.start_as_current_trace(
+#     name: str,
+#     input: Optional[Dict] = None,
+#     output: Optional[Dict] = None,
+#     tags: Optional[List[str]] = None,
+#     metadata: Optional[Dict] = None,
+#     project_name: Optional[str] = None,
+#     thread_id: Optional[str] = None,
+#     flush: bool = False,
+# ) -> Generator[TraceData]
+#
+# TraceData attributes (set via assignment):
+#   .input, .output, .tags, .metadata, .thread_id
+
 import opik
 
 with opik.start_as_current_trace("my-trace", project_name="my-project") as trace:
@@ -162,6 +177,23 @@ with opik.start_as_current_trace("my-trace", project_name="my-project") as trace
 ### Span Context Manager
 
 ```python
+# Signature:
+# opik.start_as_current_span(
+#     name: str,
+#     type: Literal["general", "tool", "llm", "guardrail"] = "general",
+#     input: Optional[Dict] = None,
+#     output: Optional[Dict] = None,
+#     tags: Optional[List[str]] = None,
+#     metadata: Optional[Dict] = None,
+#     project_name: Optional[str] = None,
+#     model: Optional[str] = None,
+#     provider: Optional[str] = None,
+#     flush: bool = False,
+# ) -> Generator[SpanData]
+#
+# SpanData attributes (set via assignment):
+#   .input, .output, .tags, .metadata, .model, .provider, .usage
+
 import opik
 
 with opik.start_as_current_trace("my-trace") as trace:
@@ -191,18 +223,64 @@ from opik import Opik
 
 client = Opik(project_name="my-project")
 
-# Create a trace
+# Signature:
+# client.trace(
+#     id: Optional[str] = None,
+#     name: Optional[str] = None,
+#     start_time: Optional[datetime] = None,
+#     end_time: Optional[datetime] = None,
+#     input: Optional[Dict] = None,
+#     output: Optional[Dict] = None,
+#     metadata: Optional[Dict] = None,
+#     tags: Optional[List[str]] = None,
+#     feedback_scores: Optional[List[FeedbackScoreDict]] = None,
+#     project_name: Optional[str] = None,
+#     error_info: Optional[ErrorInfoDict] = None,
+#     thread_id: Optional[str] = None,
+# ) -> Trace
+
 trace = client.trace(
     name="my_trace",
     input={"query": "Hello"},
     metadata={"user_id": "123"}
 )
 
-# Add spans
+# Signature:
+# trace.span(
+#     id: Optional[str] = None,
+#     parent_span_id: Optional[str] = None,
+#     name: Optional[str] = None,
+#     type: Literal["general", "tool", "llm", "guardrail"] = "general",
+#     start_time: Optional[datetime] = None,
+#     end_time: Optional[datetime] = None,
+#     metadata: Optional[Dict] = None,
+#     input: Optional[Dict] = None,
+#     output: Optional[Dict] = None,
+#     tags: Optional[List[str]] = None,
+#     usage: Optional[Dict | OpikUsage] = None,
+#     model: Optional[str] = None,
+#     provider: Optional[str | LLMProvider] = None,
+#     error_info: Optional[ErrorInfoDict] = None,
+#     total_cost: Optional[float] = None,
+# ) -> Span
+
 span1 = trace.span(
     name="preprocessing",
     input={"text": "Hello"}
 )
+# Signature:
+# span.end(
+#     end_time: Optional[datetime] = None,
+#     metadata: Optional[Dict] = None,
+#     input: Optional[Dict] = None,
+#     output: Optional[Dict] = None,
+#     tags: Optional[List[str]] = None,
+#     usage: Optional[Dict | OpikUsage] = None,
+#     model: Optional[str] = None,
+#     provider: Optional[str | LLMProvider] = None,
+#     error_info: Optional[ErrorInfoDict] = None,
+#     total_cost: Optional[float] = None,
+# ) -> None
 span1.end(output={"processed": "HELLO"})
 
 span2 = trace.span(
@@ -212,7 +290,16 @@ span2 = trace.span(
 )
 span2.end(output={"response": "Hi!"})
 
-# End the trace
+# Signature:
+# trace.end(
+#     end_time: Optional[datetime] = None,
+#     metadata: Optional[Dict] = None,
+#     input: Optional[Dict] = None,
+#     output: Optional[Dict] = None,
+#     tags: Optional[List[str]] = None,
+#     error_info: Optional[ErrorInfoDict] = None,
+#     thread_id: Optional[str] = None,
+# ) -> None
 trace.end(output={"response": "Hi!"})
 
 # Ensure all data is sent

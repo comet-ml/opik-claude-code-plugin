@@ -281,36 +281,12 @@ func onSubagentStart() {
 	if input.AgentID == "" {
 		return
 	}
-
 	debugLog("subagent_start: %s (%s)", input.AgentID, input.AgentType)
 
-	entries, err := ReadTranscript(input.TranscriptPath, 0)
-	if err != nil {
-		debugLog("read transcript: %v", err)
-		return
-	}
-
-	var taskUUID string
-	for i := len(entries) - 1; i >= 0; i-- {
-		entry := entries[i]
-		if entry.Type != "assistant" || entry.Message == nil || len(entry.Message.Content) == 0 {
-			continue
-		}
-		content := entry.Message.Content[0]
-		if content.Type == "tool_use" && content.Name == "Task" {
-			taskUUID = entry.UUID
-			break
-		}
-	}
-
-	if taskUUID == "" {
-		return
-	}
-
-	debugLog("map: %s -> %s", input.AgentID, taskUUID)
-
+	// Mapping is deferred to onSubagentStop since the Task tool_use
+	// may not be in the transcript yet when SubagentStart fires.
 	agents := LoadAgentMap(input.SessionID)
-	agents[input.AgentID] = taskUUID
+	agents[input.AgentID] = ""
 	if err := SaveAgentMap(input.SessionID, agents); err != nil {
 		debugLog("save agent map: %v", err)
 	}
@@ -330,9 +306,21 @@ func onSubagentStop() {
 	}
 
 	agents := LoadAgentMap(input.SessionID)
-	parentUUID, ok := agents[input.AgentID]
-	if !ok || parentUUID == "" {
+	if _, ok := agents[input.AgentID]; !ok {
 		return
+	}
+
+	parentUUID := agents[input.AgentID]
+	if parentUUID == "" {
+		parentUUID = findTaskUUID(agents)
+		if parentUUID == "" {
+			debugLog("subagent_stop: no matching Task found for %s", input.AgentID)
+			return
+		}
+		agents[input.AgentID] = parentUUID
+		if err := SaveAgentMap(input.SessionID, agents); err != nil {
+			debugLog("save agent map: %v", err)
+		}
 	}
 
 	parentSpanID := toV7(parentUUID)
@@ -347,6 +335,143 @@ func onSubagentStop() {
 	if err := api.Post("/spans/batch", SpanBatch{Spans: spans}); err != nil {
 		debugLog("send subagent spans: %v", err)
 	}
+
+	// Patch the parent Task span with output (it was sent before the subagent completed).
+	parentEntries, err := ReadTranscript(input.TranscriptPath, 0)
+	if err == nil {
+		taskResults := BuildTaskResults(parentEntries)
+		for _, entry := range parentEntries {
+			if entry.UUID != parentUUID || entry.Type != "assistant" || entry.Message == nil {
+				continue
+			}
+			for _, content := range entry.Message.Content {
+				if content.Type == "tool_use" && content.Name == "Task" {
+					if result, ok := taskResults[content.ID]; ok && result != nil {
+						resp := ""
+						if len(result.Content) > 0 {
+							resp = result.Content[0].Text
+						}
+						update := map[string]interface{}{
+							"output": map[string]interface{}{"response": resp},
+						}
+						if result.TotalTokens > 0 {
+							update["usage"] = map[string]int{"total_tokens": result.TotalTokens}
+						}
+						if err := api.Patch("/spans/"+parentSpanID, update); err != nil {
+							debugLog("update task span output: %v", err)
+						}
+					}
+				}
+			}
+			break
+		}
+	}
+}
+
+// findTaskUUID matches this subagent to its parent Task tool_use entry
+// by comparing the subagent's prompt against Task inputs in the parent transcript.
+func findTaskUUID(agents AgentMap) string {
+	subPrompt := extractSubagentPrompt(input.AgentTranscriptPath)
+
+	entries, err := ReadTranscript(input.TranscriptPath, 0)
+	if err != nil {
+		return ""
+	}
+
+	claimed := make(map[string]bool, len(agents))
+	for _, uuid := range agents {
+		if uuid != "" {
+			claimed[uuid] = true
+		}
+	}
+
+	var promptMatch, typeMatch, fallbackUUID string
+	for i := len(entries) - 1; i >= 0; i-- {
+		entry := entries[i]
+		if entry.Type != "assistant" || entry.Message == nil {
+			continue
+		}
+		for _, content := range entry.Message.Content {
+			if content.Type != "tool_use" || content.Name != "Task" {
+				continue
+			}
+			if claimed[entry.UUID] {
+				continue
+			}
+			if promptMatch == "" && subPrompt != "" {
+				if p, ok := content.Input["prompt"].(string); ok && p == subPrompt {
+					promptMatch = entry.UUID
+				}
+			}
+			if typeMatch == "" {
+				if st, ok := content.Input["subagent_type"].(string); ok && st == input.AgentType {
+					typeMatch = entry.UUID
+				}
+			}
+			if fallbackUUID == "" {
+				fallbackUUID = entry.UUID
+			}
+		}
+		if promptMatch != "" {
+			break
+		}
+	}
+
+	if promptMatch != "" {
+		return promptMatch
+	}
+	if typeMatch != "" {
+		return typeMatch
+	}
+	return fallbackUUID
+}
+
+// extractSubagentPrompt reads the first user message from a subagent transcript.
+func extractSubagentPrompt(path string) string {
+	if path == "" {
+		return ""
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	buf := make([]byte, 0, initialBufferSize)
+	scanner.Buffer(buf, maxBufferSize)
+
+	for scanner.Scan() {
+		var raw struct {
+			Type    string          `json:"type"`
+			Message json.RawMessage `json:"message"`
+		}
+		if err := json.Unmarshal(scanner.Bytes(), &raw); err != nil || raw.Type != "user" || raw.Message == nil {
+			continue
+		}
+
+		var msg struct {
+			Content json.RawMessage `json:"content"`
+		}
+		if err := json.Unmarshal(raw.Message, &msg); err != nil || msg.Content == nil {
+			continue
+		}
+
+		var str string
+		if err := json.Unmarshal(msg.Content, &str); err == nil && str != "" {
+			return str
+		}
+
+		var contents []Content
+		if err := json.Unmarshal(msg.Content, &contents); err == nil {
+			for _, c := range contents {
+				if c.Type == "text" && c.Text != "" {
+					return c.Text
+				}
+			}
+		}
+	}
+	return ""
 }
 
 func flush(state *State) {
@@ -507,7 +632,9 @@ func processToolUse(span *Span, p ParsedEntry, toolResults map[string]*ToolResul
 				"new_string": truncateMsg,
 			}
 		}
-		span.Output = map[string]interface{}{"result": truncateMsg}
+		if config.Truncate {
+			span.Output = map[string]interface{}{"result": truncateMsg}
+		}
 
 	case "Write":
 		if config.Truncate {
@@ -515,11 +642,13 @@ func processToolUse(span *Span, p ParsedEntry, toolResults map[string]*ToolResul
 				"file_path": span.Input["file_path"],
 				"content":   truncateMsg,
 			}
+			span.Output = map[string]interface{}{"result": truncateMsg}
 		}
-		span.Output = map[string]interface{}{"result": truncateMsg}
 
 	case "Read":
-		span.Output = map[string]interface{}{"result": truncateMsg}
+		if config.Truncate {
+			span.Output = map[string]interface{}{"result": truncateMsg}
+		}
 
 	case "Task":
 		subType := "Task"

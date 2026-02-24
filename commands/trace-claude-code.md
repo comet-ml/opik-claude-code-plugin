@@ -56,7 +56,7 @@ When enabled, all your Claude Code interactions are automatically logged to Opik
 - Tool calls, thinking, and responses become spans
 - Subagent invocations are nested under their parent
 
-View your traces at: https://www.comet.com/opik
+View your traces where they are logged with `opik configure`. 
 
 ## Notes
 
