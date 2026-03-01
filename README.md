@@ -28,7 +28,7 @@ Each conversation turn becomes an Opik trace. Tool calls, thoughts, and response
 From within Claude Code:
 
 ```
-/plugin marketplace add github:comet-ml/opik-claude-plugin
+/plugin marketplace add comet-ml/opik-claude-code-plugin
 ```
 
 Then install the plugin:
@@ -42,7 +42,7 @@ Then install the plugin:
 If you've cloned the repo locally, add it as a marketplace and install from there:
 
 ```
-/plugin marketplace add /path/to/opik-claude-plugin
+/plugin marketplace add /path/to/opik-claude-code-plugin
 /plugin install opik
 ```
 
@@ -178,7 +178,7 @@ Reviews agent code for:
 ## Directory Structure
 
 ```
-opik-claude-plugin/
+opik-claude-code-plugin/
 ├── .claude-plugin/
 │   ├── plugin.json         # Plugin manifest
 │   └── marketplace.json    # Marketplace definition

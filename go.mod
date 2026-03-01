@@ -1,3 +1,3 @@
-module github.com/comet-ml/opik-claude-plugin
+module github.com/comet-ml/opik-claude-code-plugin
 
 go 1.21

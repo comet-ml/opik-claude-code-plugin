@@ -2,7 +2,7 @@
 
 We're excited that you're interested in contributing! There are many ways to help:
 
-* Submit [bug reports](https://github.com/comet-ml/opik-claude-plugin/issues) and [feature requests](https://github.com/comet-ml/opik-claude-plugin/issues)
+* Submit [bug reports](https://github.com/comet-ml/opik-claude-code-plugin/issues) and [feature requests](https://github.com/comet-ml/opik-claude-code-plugin/issues)
 * Improve the documentation
 * Add new skills, commands, or agents
 * Enhance the session tracing logger
@@ -17,14 +17,14 @@ We're excited that you're interested in contributing! There are many ways to hel
 ### Clone and Install Locally
 
 ```bash
-git clone https://github.com/comet-ml/opik-claude-plugin.git
-cd opik-claude-plugin
+git clone https://github.com/comet-ml/opik-claude-code-plugin.git
+cd opik-claude-code-plugin
 ```
 
 Install the plugin from your local clone:
 
 ```
-/plugin marketplace add /path/to/opik-claude-plugin
+/plugin marketplace add /path/to/opik-claude-code-plugin
 /plugin install opik
 ```
 
@@ -44,7 +44,7 @@ Then restart Claude Code. The plugin cache is at `~/.claude/plugins/cache/opik/`
 ## Project Structure
 
 ```
-opik-claude-plugin/
+opik-claude-code-plugin/
 ├── .claude-plugin/
 │   ├── plugin.json         # Plugin manifest
 │   └── marketplace.json    # Marketplace definition
