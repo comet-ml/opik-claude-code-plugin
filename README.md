@@ -13,13 +13,7 @@ Log Claude Code sessions to [Opik](https://github.com/comet-ml/opik) for LLM obs
 ## How Tracing Works
 We trigger tracing for everything done in Claude Code, but don't slow you down.
 
-```
-User submits prompt  →  UserPromptSubmit hook  →  CREATE TRACE
-        ↓
-Claude uses tools    →  PostToolUse hooks      →  CREATE SPANS
-        ↓
-Claude finishes      →  Stop hook              →  END TRACE
-```
+<img src="assets/readme_diagram.svg" alt="How Tracing Works" width="600">
 
 Each conversation turn becomes an Opik trace. Tool calls, thoughts, and responses become spans. Subagent invocations are nested under their parent Task span.
 
