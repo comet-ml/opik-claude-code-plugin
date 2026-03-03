@@ -345,7 +345,7 @@ func onSubagentStop() {
 				continue
 			}
 			for _, content := range entry.Message.Content {
-				if content.Type == "tool_use" && content.Name == "Task" {
+				if content.Type == "tool_use" && (content.Name == "Agent" || content.Name == "Task") {
 					if result, ok := taskResults[content.ID]; ok && result != nil {
 						resp := ""
 						if len(result.Content) > 0 {
@@ -392,7 +392,7 @@ func findTaskUUID(agents AgentMap) string {
 			continue
 		}
 		for _, content := range entry.Message.Content {
-			if content.Type != "tool_use" || content.Name != "Task" {
+			if content.Type != "tool_use" || (content.Name != "Agent" && content.Name != "Task") {
 				continue
 			}
 			if claimed[entry.UUID] {
@@ -650,7 +650,7 @@ func processToolUse(span *Span, p ParsedEntry, toolResults map[string]*ToolResul
 			span.Output = map[string]interface{}{"result": truncateMsg}
 		}
 
-	case "Task":
+	case "Agent", "Task":
 		subType := "Task"
 		if st, ok := span.Input["subagent_type"].(string); ok && st != "" {
 			subType = st
