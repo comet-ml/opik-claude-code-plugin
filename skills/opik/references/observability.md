@@ -260,23 +260,15 @@ def call_downstream_service(data):
 
 ### Using the Distributed Headers Context Manager
 
-For cleaner code, use the `distributed_headers()` context manager:
+On the receiving side, use `distributed_headers` to link into an existing trace:
 
 ```python
-import opik
-import httpx
+from opik.decorator.context_manager import distributed_headers
 
-@opik.track
-async def orchestrator():
-    async with httpx.AsyncClient() as client:
-        # Automatically includes trace headers
-        with opik.opik_context.distributed_headers() as headers:
-            response = await client.post(
-                "https://service-a/process",
-                headers=headers,
-                json={"task": "analyze"}
-            )
-    return response.json()
+# In the receiving service, use the context manager with headers from the request
+with distributed_headers(incoming_headers):
+    # Code here runs within the parent trace context
+    result = process_request(data)
 ```
 
 ### Receiving Distributed Headers

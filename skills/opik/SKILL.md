@@ -67,22 +67,27 @@ await client.flush();
 
 Use framework-specific integrations instead of manual `@opik.track` when available — they capture more detail (tokens, model, cost) automatically.
 
-For the full list of 80+ integrations with code snippets, see `references/integrations.md`.
+For the full list of integrations with code snippets, see `references/integrations.md`.
 
 ### Common Patterns
 
-**Wrap-the-client** (OpenAI, Anthropic, Groq, etc.):
+**Wrap-the-client** (OpenAI, Anthropic, Bedrock, Gemini, etc.):
 ```python
 from opik.integrations.openai import track_openai
 client = track_openai(OpenAI())
 # All calls now traced automatically
 ```
 
-**Global enable** (CrewAI, DSPy, Pydantic AI, etc.):
+**Global enable** (CrewAI, DSPy, etc.):
 ```python
 from opik.integrations.crewai import track_crewai
-track_crewai()
-# All CrewAI operations now traced
+track_crewai(project_name="my-project", crew=crew)  # crew= required for v1.0.0+
+```
+
+**Callback-based** (DSPy):
+```python
+from opik.integrations.dspy import OpikCallback
+dspy.configure(callbacks=[OpikCallback()])
 ```
 
 **Callback/tracer** (LangChain, LangGraph, LlamaIndex):
@@ -107,5 +112,5 @@ track_adk_agent_recursive(agent, opik_tracer)
 | Python SDK (decorators, context, async, distributed tracing) | `references/tracing-python.md` |
 | TypeScript SDK (client, decorators, framework integrations) | `references/tracing-typescript.md` |
 | REST API (HTTP endpoints, authentication) | `references/tracing-rest-api.md` |
-| All 80+ integrations with code snippets | `references/integrations.md` |
+| All integrations with code snippets | `references/integrations.md` |
 | Core concepts (traces, spans, threads, metadata, feedback) | `references/observability.md` |

@@ -1,277 +1,10 @@
 # Opik Integrations Reference
 
-Comprehensive guide to Opik's 80+ integrations organized by category.
+Comprehensive guide to Opik integrations organized by integration mechanism.
 
-## Python Agent Frameworks
+## A. Python — Direct Opik SDK Integrations
 
-### AG2 (AutoGen v2)
-
-```python
-from opik.integrations.ag2 import track_ag2
-
-track_ag2()
-
-# Your AG2 agents are now traced
-```
-
-### Agno
-
-```python
-from opik.integrations.agno import track_agno
-
-track_agno()
-
-# Agno agent operations traced
-```
-
-### Autogen
-
-```python
-from opik.integrations.autogen import track_autogen
-
-track_autogen()
-
-# AutoGen multi-agent conversations traced
-```
-
-### CrewAI
-
-```python
-from opik.integrations.crewai import track_crewai
-
-track_crewai()
-
-# All crew operations traced
-from crewai import Agent, Task, Crew
-
-agent = Agent(role="Researcher", goal="Research topics")
-crew = Crew(agents=[agent], tasks=[...])
-result = crew.kickoff()
-```
-
-### DSPy
-
-```python
-from opik.integrations.dspy import track_dspy
-import dspy
-
-track_dspy()
-
-# DSPy modules and optimizers traced
-```
-
-### Google ADK (Agent Development Kit)
-
-```python
-from opik.integrations.adk import OpikTracer, track_adk_agent_recursive
-
-opik_tracer = OpikTracer()
-agent = ...  # Your ADK agent
-track_adk_agent_recursive(agent, opik_tracer)
-```
-
-### Haystack
-
-```python
-from opik.integrations.haystack import OpikConnector
-
-pipeline = Pipeline()
-pipeline.add_component("opik", OpikConnector("pipeline-name"))
-# Add other components...
-```
-
-### Instructor
-
-```python
-from opik.integrations.instructor import track_instructor
-import instructor
-
-client = track_instructor(instructor.from_openai(OpenAI()))
-```
-
-### LangChain
-
-```python
-from opik.integrations.langchain import OpikTracer
-from langchain_openai import ChatOpenAI
-
-tracer = OpikTracer()
-llm = ChatOpenAI()
-response = llm.invoke("Hello!", config={"callbacks": [tracer]})
-```
-
-### LangGraph
-
-```python
-from opik.integrations.langchain import OpikTracer
-
-graph = ...  # Your LangGraph
-app = graph.compile()
-
-tracer = OpikTracer(graph=app.get_graph(xray=True))
-result = app.invoke(
-    {"messages": [HumanMessage(content="Hello")]},
-    config={"callbacks": [tracer]}
-)
-```
-
-### LiveKit Agents
-
-```python
-from opik.integrations.livekit import track_livekit
-
-track_livekit()
-
-# LiveKit agent interactions traced
-```
-
-### LlamaIndex
-
-```python
-from opik.integrations.llama_index import LlamaIndexCallbackHandler
-from llama_index.core import Settings
-
-Settings.callback_manager.add_handler(LlamaIndexCallbackHandler())
-# All LlamaIndex operations traced
-```
-
-### Microsoft Agent Framework
-
-```python
-from opik.integrations.microsoft_agent import track_microsoft_agent
-
-track_microsoft_agent()
-
-# Microsoft Agent Framework operations traced
-```
-
-### OpenAI Agents (Swarm)
-
-```python
-from opik.integrations.openai_agents import track_openai_agents
-
-track_openai_agents()
-
-# OpenAI Agents/Swarm operations traced
-```
-
-### Pipecat
-
-```python
-from opik.integrations.pipecat import track_pipecat
-
-track_pipecat()
-
-# Pipecat pipeline operations traced
-```
-
-### Pydantic AI
-
-```python
-from opik.integrations.pydantic_ai import track_pydantic_ai
-from pydantic_ai import Agent
-
-track_pydantic_ai()
-
-agent = Agent("openai:gpt-4")
-# Agent runs traced
-```
-
-### Semantic Kernel
-
-```python
-from opik.integrations.semantic_kernel import track_semantic_kernel
-
-track_semantic_kernel()
-
-# Semantic Kernel operations traced
-```
-
-### Smolagents
-
-```python
-from opik.integrations.smolagents import track_smolagents
-
-track_smolagents()
-
-# Smolagents operations traced
-```
-
-### Strands Agents
-
-```python
-from opik.integrations.strands import track_strands
-
-track_strands()
-
-# Strands agent operations traced
-```
-
-### VoltAgent
-
-```python
-from opik.integrations.voltagent import track_voltagent
-
-track_voltagent()
-
-# VoltAgent operations traced
-```
-
-## TypeScript Frameworks
-
-### BeeAI
-
-```typescript
-import { Opik } from "opik";
-import { BeeAgent } from "bee-agent-framework";
-
-const opik = new Opik();
-// Configure BeeAI with Opik callbacks
-```
-
-### LangChain.js
-
-```typescript
-import { Opik } from "opik";
-import { ChatOpenAI } from "@langchain/openai";
-
-const opik = new Opik();
-const tracer = opik.getLangChainTracer();
-
-const llm = new ChatOpenAI();
-await llm.invoke("Hello", { callbacks: [tracer] });
-```
-
-### Mastra
-
-```typescript
-import { Opik } from "opik";
-import { Mastra } from "mastra";
-
-const opik = new Opik();
-// Configure Mastra with Opik
-```
-
-### Vercel AI SDK
-
-```typescript
-import { Opik } from "opik";
-import { generateText } from "ai";
-import { openai } from "@ai-sdk/openai";
-
-const opik = new Opik();
-
-const { text } = await generateText({
-  model: openai("gpt-4"),
-  prompt: "Hello",
-  experimental_telemetry: {
-    isEnabled: true,
-    functionId: "my-function"
-  }
-});
-```
-
-## Model Providers
+These use modules that exist in `opik.integrations.*`. They provide the richest tracing with automatic token/cost capture.
 
 ### OpenAI
 
@@ -285,6 +18,26 @@ response = client.chat.completions.create(
     model="gpt-4",
     messages=[{"role": "user", "content": "Hello!"}]
 )
+```
+
+Also works with `AsyncOpenAI` and `AzureOpenAI`:
+
+```python
+from openai import AsyncOpenAI, AzureOpenAI
+
+async_client = track_openai(AsyncOpenAI())
+azure_client = track_openai(AzureOpenAI())
+```
+
+### OpenAI Agents SDK
+
+```python
+from opik.integrations.openai.agents import OpikTracingProcessor
+from agents import set_trace_processors
+
+set_trace_processors([OpikTracingProcessor()])
+
+# All OpenAI Agents/Swarm operations are now traced
 ```
 
 ### Anthropic
@@ -307,6 +60,7 @@ response = client.messages.create(
 ```python
 from opik.integrations.bedrock import track_bedrock
 import boto3
+import json
 
 bedrock = boto3.client("bedrock-runtime")
 tracked_client = track_bedrock(bedrock)
@@ -317,60 +71,197 @@ response = tracked_client.invoke_model(
 )
 ```
 
-### BytePlus
+### AWS SageMaker
 
 ```python
-from opik.integrations.byteplus import track_byteplus
+from opik.integrations.sagemaker import track_sagemaker
+import boto3
 
-client = track_byteplus(BytePlusClient())
+sagemaker = boto3.client("sagemaker-runtime")
+tracked_client = track_sagemaker(sagemaker)
 ```
 
-### Cohere
+### Google Gemini (GenAI)
+
+Note: The module is `genai`, not `gemini`.
 
 ```python
-from opik.integrations.cohere import track_cohere
-import cohere
+from opik.integrations.genai import track_genai
+from google import genai
 
-client = track_cohere(cohere.Client())
+client = track_genai(genai.Client())
 
-response = client.generate(prompt="Hello")
+response = client.models.generate_content(
+    model="gemini-2.0-flash",
+    contents="Hello!"
+)
 ```
 
-### DeepSeek
+### LangChain
 
 ```python
-from opik.integrations.deepseek import track_deepseek
+from opik.integrations.langchain import OpikTracer
+from langchain_openai import ChatOpenAI
 
-client = track_deepseek(DeepSeekClient())
+tracer = OpikTracer()
+llm = ChatOpenAI()
+response = llm.invoke("Hello!", config={"callbacks": [tracer]})
 ```
 
-### Fireworks AI
+### LangGraph
+
+**Option 1: Callback approach**
 
 ```python
-from opik.integrations.fireworks import track_fireworks
+from opik.integrations.langchain import OpikTracer
 
-client = track_fireworks(FireworksClient())
+graph = ...  # Your LangGraph
+app = graph.compile()
+
+tracer = OpikTracer(graph=app.get_graph(xray=True))
+result = app.invoke(
+    {"messages": [HumanMessage(content="Hello")]},
+    config={"callbacks": [tracer]}
+)
 ```
 
-### Google Gemini
+**Option 2: Wrapper approach**
 
 ```python
-from opik.integrations.gemini import track_gemini
-import google.generativeai as genai
+from opik.integrations.langchain import OpikTracer, track_langgraph
 
-track_gemini(genai)
+graph = ...
+app = graph.compile()
 
-model = genai.GenerativeModel("gemini-pro")
-response = model.generate_content("Hello")
+opik_tracer = OpikTracer()
+tracked_app = track_langgraph(app, opik_tracer)
+result = tracked_app.invoke({"messages": [HumanMessage(content="Hello")]})
+```
+
+### LlamaIndex
+
+**Option 1: Global handler** (recommended)
+
+```bash
+pip install llama-index-callbacks-opik
+```
+
+```python
+from llama_index.core import set_global_handler
+
+set_global_handler("opik")
+
+# All LlamaIndex operations are now traced
+```
+
+**Option 2: Manual callback handler**
+
+```python
+from opik.integrations.llama_index import LlamaIndexCallbackHandler
+from llama_index.core import Settings
+
+Settings.callback_manager.add_handler(LlamaIndexCallbackHandler())
+```
+
+### CrewAI
+
+```python
+from opik.integrations.crewai import track_crewai
+from crewai import Agent, Task, Crew
+
+agent = Agent(role="Researcher", goal="Research topics", backstory="Expert researcher")
+task = Task(description="Research ML", agent=agent)
+crew = Crew(agents=[agent], tasks=[task])
+
+# crew= parameter is required for v1.0.0+
+track_crewai(project_name="my-project", crew=crew)
+
+result = crew.kickoff()
+```
+
+### DSPy
+
+```python
+from opik.integrations.dspy import OpikCallback
+import dspy
+
+dspy.configure(callbacks=[OpikCallback()])
+
+# DSPy modules and optimizers are now traced
+```
+
+### Google ADK (Agent Development Kit)
+
+```python
+from opik.integrations.adk import OpikTracer, track_adk_agent_recursive
+
+opik_tracer = OpikTracer()
+agent = ...  # Your ADK agent
+track_adk_agent_recursive(agent, opik_tracer)
+```
+
+### Haystack
+
+Requires the `HAYSTACK_CONTENT_TRACING_ENABLED` environment variable:
+
+```python
+import os
+os.environ["HAYSTACK_CONTENT_TRACING_ENABLED"] = "true"
+
+from opik.integrations.haystack import OpikConnector
+from haystack import Pipeline
+
+pipeline = Pipeline()
+pipeline.add_component("opik", OpikConnector("pipeline-name"))
+# Add other components...
+```
+
+### AI Suite
+
+```python
+from opik.integrations.aisuite import track_aisuite
+import aisuite as ai
+
+client = track_aisuite(ai.Client())
+```
+
+### Guardrails AI
+
+```python
+from opik.integrations.guardrails import OpikTracer as GuardrailsTracer
+
+tracer = GuardrailsTracer()
+# Use with Guardrails AI validation
+```
+
+### Harbor
+
+```python
+from opik.integrations.harbor import track_harbor
+```
+
+## B. Python — Via OpenAI-Compatible API
+
+Many providers expose OpenAI-compatible endpoints. Use `track_openai` with a custom `base_url`:
+
+```python
+from opik.integrations.openai import track_openai
+from openai import OpenAI
+
+# Generic pattern — change base_url and api_key per provider
+client = track_openai(OpenAI(
+    base_url="https://api.provider.com/v1",
+    api_key="your-provider-api-key"
+))
 ```
 
 ### Groq
 
 ```python
-from opik.integrations.groq import track_groq
-from groq import Groq
-
-client = track_groq(Groq())
+client = track_openai(OpenAI(
+    base_url="https://api.groq.com/openai/v1",
+    api_key=os.environ["GROQ_API_KEY"]
+))
 
 response = client.chat.completions.create(
     model="llama-3.1-70b-versatile",
@@ -378,131 +269,280 @@ response = client.chat.completions.create(
 )
 ```
 
-### Mistral AI
+### DeepSeek
 
 ```python
-from opik.integrations.mistral import track_mistral
-from mistralai.client import MistralClient
-
-client = track_mistral(MistralClient())
+client = track_openai(OpenAI(
+    base_url="https://api.deepseek.com/v1",
+    api_key=os.environ["DEEPSEEK_API_KEY"]
+))
 ```
 
-### Novita AI
+### Fireworks AI
 
 ```python
-from opik.integrations.novita import track_novita
-
-client = track_novita(NovitaClient())
-```
-
-### Ollama
-
-```python
-from opik.integrations.ollama import track_ollama
-import ollama
-
-track_ollama(ollama)
-
-response = ollama.chat(
-    model="llama3",
-    messages=[{"role": "user", "content": "Hello"}]
-)
-```
-
-### Together AI
-
-```python
-from opik.integrations.together import track_together
-import together
-
-client = track_together(together.Together())
-```
-
-### IBM WatsonX
-
-```python
-from opik.integrations.watsonx import track_watsonx
-
-client = track_watsonx(WatsonXClient())
-```
-
-### xAI Grok
-
-```python
-from opik.integrations.xai import track_xai
-
-client = track_xai(XAIClient())
-```
-
-## LLM Gateways
-
-### Opik LLM Gateway
-
-Native gateway for unified LLM access with built-in tracing.
-
-```python
-from opik.gateway import OpikGateway
-
-gateway = OpikGateway()
-
-# Route to any provider with automatic tracing
-response = gateway.chat(
-    provider="openai",
-    model="gpt-4",
-    messages=[{"role": "user", "content": "Hello"}]
-)
-```
-
-### Kong AI Gateway
-
-```python
-# Configure Kong to forward Opik headers
-# In Kong configuration:
-# plugins:
-#   - name: opik-tracing
-#     config:
-#       api_key: ${OPIK_API_KEY}
-```
-
-### LiteLLM
-
-```python
-from opik.integrations.litellm import track_litellm
-import litellm
-
-track_litellm()
-
-# All LiteLLM calls traced regardless of provider
-response = litellm.completion(
-    model="gpt-4",  # or claude-3, gemini-pro, etc.
-    messages=[{"role": "user", "content": "Hello"}]
-)
+client = track_openai(OpenAI(
+    base_url="https://api.fireworks.ai/inference/v1",
+    api_key=os.environ["FIREWORKS_API_KEY"]
+))
 ```
 
 ### OpenRouter
 
 ```python
-from opik.integrations.openrouter import track_openrouter
-
-client = track_openrouter(OpenRouterClient())
-
-# Access any model through OpenRouter with tracing
-response = client.chat(
-    model="anthropic/claude-3-opus",
-    messages=[{"role": "user", "content": "Hello"}]
-)
+client = track_openai(OpenAI(
+    base_url="https://openrouter.ai/api/v1",
+    api_key=os.environ["OPENROUTER_API_KEY"]
+))
 ```
 
 ### Portkey
 
 ```python
-from opik.integrations.portkey import track_portkey
-from portkey_ai import Portkey
-
-client = track_portkey(Portkey())
+client = track_openai(OpenAI(
+    base_url="https://api.portkey.ai/v1",
+    api_key=os.environ["PORTKEY_API_KEY"]
+))
 ```
 
-## No-Code Platforms
+### Cohere
+
+```python
+client = track_openai(OpenAI(
+    base_url="https://api.cohere.com/compatibility/v1",
+    api_key=os.environ["COHERE_API_KEY"]
+))
+```
+
+### BytePlus
+
+```python
+client = track_openai(OpenAI(
+    base_url="https://api.byteplus.com/v1",
+    api_key=os.environ["BYTEPLUS_API_KEY"]
+))
+```
+
+### Ollama (OpenAI-compatible mode)
+
+```python
+client = track_openai(OpenAI(
+    base_url="http://localhost:11434/v1",
+    api_key="ollama"  # Ollama doesn't require a real key
+))
+
+response = client.chat.completions.create(
+    model="llama3",
+    messages=[{"role": "user", "content": "Hello"}]
+)
+```
+
+## C. Python — Via LiteLLM
+
+LiteLLM provides a unified interface to 100+ LLM providers. The Opik integration is on the LiteLLM side:
+
+```python
+from litellm.integrations.opik.opik import OpikLogger
+import litellm
+
+litellm.callbacks = [OpikLogger()]
+
+# All LiteLLM calls are traced regardless of provider
+response = litellm.completion(
+    model="gpt-4",
+    messages=[{"role": "user", "content": "Hello"}]
+)
+```
+
+Use this for providers like Together AI, Novita AI, IBM WatsonX, xAI Grok, Mistral AI, and any other LiteLLM-supported model:
+
+```python
+# Together AI via LiteLLM
+response = litellm.completion(model="together_ai/meta-llama/Llama-3-70b", messages=[...])
+
+# Mistral via LiteLLM
+response = litellm.completion(model="mistral/mistral-large-latest", messages=[...])
+
+# xAI Grok via LiteLLM
+response = litellm.completion(model="xai/grok-beta", messages=[...])
+```
+
+## D. Python — Via Logfire/OTLP Bridge
+
+### Pydantic AI
+
+Pydantic AI uses Logfire for observability. Bridge to Opik via OTLP:
+
+```python
+import logfire
+
+logfire.configure(send_to_logfire=False)
+logfire.instrument_pydantic_ai()
+
+# Pydantic AI agent runs are now traced via OTLP to Opik
+from pydantic_ai import Agent
+agent = Agent("openai:gpt-4")
+```
+
+## E. Python — Via OpenTelemetry OTLP Export
+
+Frameworks that support OpenTelemetry can send traces to Opik's OTLP endpoint. Configure the OTLP exporter to point at your Opik instance:
+
+```bash
+export OTEL_EXPORTER_OTLP_ENDPOINT="https://www.comet.com/opik/api/v1/private/otel"
+export OTEL_EXPORTER_OTLP_HEADERS="Authorization=your-api-key,Comet-Workspace=your-workspace"
+```
+
+Frameworks that use this approach:
+- **Autogen / AG2** — configure OTLP in Autogen's telemetry settings
+- **Agno** — uses OpenInference instrumentor with OTLP export
+- **LiveKit Agents** — configure OTLP export in LiveKit settings
+- **Smolagents** — uses OpenInference instrumentor with OTLP export
+- **Semantic Kernel** — configure OTLP in Semantic Kernel's telemetry
+- **Strands Agents** — configure OTLP export
+- **Pipecat** — configure OTLP in Pipecat settings
+- **Microsoft Agent Framework** — configure OTLP export
+- **VoltAgent** — configure OTLP export
+
+## F. Python — Manual with @opik.track
+
+For providers or frameworks without a direct integration, use `@opik.track` to manually instrument:
+
+### Instructor
+
+Track the underlying provider first, then patch with Instructor:
+
+```python
+from opik.integrations.openai import track_openai
+from openai import OpenAI
+import instructor
+
+tracked_client = track_openai(OpenAI())
+client = instructor.from_openai(tracked_client)
+
+# Instructor calls are traced through the tracked OpenAI client
+```
+
+### Ollama (native client)
+
+```python
+import opik
+import ollama
+
+@opik.track(type="llm")
+def chat_with_ollama(prompt: str) -> str:
+    response = ollama.chat(
+        model="llama3",
+        messages=[{"role": "user", "content": prompt}]
+    )
+
+    opik.opik_context.update_current_span(
+        model="llama3",
+        provider="ollama",
+        metadata={"source": "ollama-native"}
+    )
+
+    return response["message"]["content"]
+```
+
+## G. TypeScript Integrations
+
+### OpenAI
+
+```typescript
+import { trackOpenAI } from "opik-openai";
+import OpenAI from "openai";
+
+const openai = trackOpenAI(new OpenAI());
+
+const response = await openai.chat.completions.create({
+  model: "gpt-4",
+  messages: [{ role: "user", content: "Hello!" }],
+});
+```
+
+### LangChain.js
+
+```typescript
+import { OpikCallbackHandler } from "opik-langchain";
+import { ChatOpenAI } from "@langchain/openai";
+
+const handler = new OpikCallbackHandler();
+
+const llm = new ChatOpenAI();
+await llm.invoke("Hello", { callbacks: [handler] });
+```
+
+### Vercel AI SDK
+
+```typescript
+import { OpikExporter } from "opik-vercel";
+import { NodeSDK } from "@opentelemetry/sdk-node";
+import { generateText } from "ai";
+import { openai } from "@ai-sdk/openai";
+
+const sdk = new NodeSDK({
+  traceExporter: new OpikExporter(),
+});
+sdk.start();
+
+const { text } = await generateText({
+  model: openai("gpt-4"),
+  prompt: "Hello",
+  experimental_telemetry: {
+    isEnabled: true,
+    functionId: "my-function",
+  },
+});
+```
+
+### Google Gemini
+
+```typescript
+import { trackGemini } from "opik-gemini";
+```
+
+### Mastra
+
+Mastra uses OTLP — no direct Opik wrapper. Configure Mastra's telemetry to export via OTLP:
+
+```typescript
+import { Mastra } from "mastra";
+
+const mastra = new Mastra({
+  // ... your config
+  telemetry: {
+    export: {
+      type: "otlp",
+      endpoint: "https://www.comet.com/opik/api/v1/private/otel",
+      headers: {
+        Authorization: "your-api-key",
+        "Comet-Workspace": "your-workspace",
+      },
+    },
+  },
+});
+```
+
+### Cloudflare Workers AI
+
+Use the Opik client directly for manual tracing:
+
+```typescript
+import { Opik } from "opik";
+
+const client = new Opik({ projectName: "workers-ai" });
+
+const trace = client.trace({ name: "worker-request", input: { prompt } });
+const span = trace.span({ name: "ai-call", type: "llm" });
+// ... Workers AI call
+span.end({ output: { response } });
+trace.end({ output: { response } });
+
+await client.flush();
+```
+
+## H. No-Code Platforms
 
 ### Cursor
 
@@ -547,69 +587,19 @@ Use the Opik node in n8n:
 3. Enable Opik tracing
 4. Configure API key
 
-## OpenTelemetry
-
-### Python (OpenTelemetry)
-
-```python
-from opentelemetry import trace
-from opik.integrations.opentelemetry import OpikSpanExporter
-
-# Configure OpenTelemetry with Opik exporter
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import BatchSpanProcessor
-
-provider = TracerProvider()
-processor = BatchSpanProcessor(OpikSpanExporter())
-provider.add_span_processor(processor)
-trace.set_tracer_provider(provider)
-
-# Your OpenTelemetry instrumented code
-tracer = trace.get_tracer(__name__)
-with tracer.start_as_current_span("my-operation"):
-    # Operations are exported to Opik
-    pass
-```
-
-### Ruby (OpenTelemetry)
-
-```ruby
-require 'opentelemetry/sdk'
-require 'opik/opentelemetry'
-
-OpenTelemetry::SDK.configure do |c|
-  c.add_span_processor(
-    OpenTelemetry::SDK::Trace::Export::BatchSpanProcessor.new(
-      Opik::OpenTelemetry::Exporter.new
-    )
-  )
-end
-```
-
-### Java (OpenTelemetry)
-
-```java
-import io.opentelemetry.sdk.trace.SdkTracerProvider;
-import com.opik.opentelemetry.OpikSpanExporter;
-
-SdkTracerProvider tracerProvider = SdkTracerProvider.builder()
-    .addSpanProcessor(
-        BatchSpanProcessor.builder(new OpikSpanExporter()).build()
-    )
-    .build();
-```
-
 ## Integration Best Practices
 
 ### Choosing an Integration
 
-| Scenario | Recommended Integration |
-|----------|------------------------|
-| Single LLM provider | Provider-specific (OpenAI, Anthropic, etc.) |
-| Multiple providers | LiteLLM or OpenRouter |
-| Agent framework | Framework-specific (LangChain, CrewAI, etc.) |
-| Existing OpenTelemetry | OpenTelemetry exporter |
-| No-code platform | Platform-specific integration |
+| Scenario | Recommended Approach |
+|----------|---------------------|
+| Single LLM provider with direct SDK support | Provider-specific (OpenAI, Anthropic, etc.) |
+| OpenAI-compatible provider | `track_openai` with custom `base_url` |
+| Multiple providers via single interface | LiteLLM with `OpikLogger` callback |
+| Agent framework with direct support | Framework-specific (LangChain, CrewAI, etc.) |
+| OTLP-compatible framework | OTLP export to Opik endpoint |
+| No integration available | Manual `@opik.track` decorator |
+| No-code platform | Platform-specific configuration |
 
 ### Layering Integrations
 

@@ -329,20 +329,17 @@ def call_microservice(data: dict):
     return response.json()
 ```
 
-### Using the Context Manager
+### Using the Distributed Headers Context Manager
+
+On the receiving side, use `distributed_headers` to link into an existing trace:
 
 ```python
-import opik
+from opik.decorator.context_manager import distributed_headers
 
-@opik.track
-async def orchestrate_workflow():
-    async with httpx.AsyncClient() as client:
-        # Headers automatically included
-        with opik.opik_context.distributed_headers() as headers:
-            # Call multiple services with same trace context
-            result_a = await client.post("https://service-a/api", headers=headers)
-            result_b = await client.post("https://service-b/api", headers=headers)
-    return {"a": result_a.json(), "b": result_b.json()}
+# In the receiving service, use the context manager with headers from the request
+with distributed_headers(incoming_headers):
+    # Code here runs within the parent trace context
+    result = process_request(data)
 ```
 
 ### Receiving Headers in Downstream Service
@@ -524,15 +521,14 @@ track_adk_agent_recursive(agent, opik_tracer)
 from opik.integrations.crewai import track_crewai
 from crewai import Agent, Task, Crew
 
-# Enable tracing for all CrewAI operations
-track_crewai()
+agent = Agent(role="Researcher", goal="Research topics", backstory="Expert researcher")
+task = Task(description="Research ML", agent=agent)
+crew = Crew(agents=[agent], tasks=[task])
 
-agent = Agent(
-    role="Researcher",
-    goal="Research topics",
-    backstory="Expert researcher"
-)
-# All crew operations are now traced
+# crew= parameter is required for v1.0.0+
+track_crewai(project_name="my-project", crew=crew)
+
+result = crew.kickoff()
 ```
 
 ### LlamaIndex
@@ -552,25 +548,27 @@ Settings.callback_manager.add_handler(
 ### DSPy
 
 ```python
-from opik.integrations.dspy import track_dspy
+from opik.integrations.dspy import OpikCallback
 import dspy
 
-# Enable tracing
-track_dspy()
+dspy.configure(callbacks=[OpikCallback()])
 
-# Your DSPy modules are now traced
+# DSPy modules and optimizers are now traced
 ```
 
 ### Pydantic AI
 
+Pydantic AI uses Logfire for observability. Bridge to Opik via OTLP:
+
 ```python
-from opik.integrations.pydantic_ai import track_pydantic_ai
+import logfire
+
+logfire.configure(send_to_logfire=False)
+logfire.instrument_pydantic_ai()
+
 from pydantic_ai import Agent
-
-track_pydantic_ai()
-
 agent = Agent("openai:gpt-4")
-# Agent runs are now traced
+# Agent runs are now traced via OTLP to Opik
 ```
 
 ### Bedrock
@@ -590,11 +588,17 @@ response = tracked_client.invoke_model(
 
 ### Groq
 
-```python
-from opik.integrations.groq import track_groq
-from groq import Groq
+Groq exposes an OpenAI-compatible API. Use `track_openai` with Groq's base URL:
 
-client = track_groq(Groq())
+```python
+from opik.integrations.openai import track_openai
+from openai import OpenAI
+import os
+
+client = track_openai(OpenAI(
+    base_url="https://api.groq.com/openai/v1",
+    api_key=os.environ["GROQ_API_KEY"]
+))
 
 response = client.chat.completions.create(
     model="llama-3.1-70b-versatile",
@@ -604,25 +608,51 @@ response = client.chat.completions.create(
 
 ### Ollama
 
+**Option 1: OpenAI-compatible mode** (recommended)
+
 ```python
-from opik.integrations.ollama import track_ollama
-import ollama
+from opik.integrations.openai import track_openai
+from openai import OpenAI
 
-track_ollama(ollama)
+client = track_openai(OpenAI(
+    base_url="http://localhost:11434/v1",
+    api_key="ollama"
+))
 
-response = ollama.chat(
+response = client.chat.completions.create(
     model="llama3",
     messages=[{"role": "user", "content": "Hello"}]
 )
 ```
 
-### LiteLLM Gateway
+**Option 2: Manual with @opik.track**
 
 ```python
-from opik.integrations.litellm import track_litellm
+import opik
+import ollama
+
+@opik.track(type="llm")
+def chat_with_ollama(prompt: str) -> str:
+    response = ollama.chat(
+        model="llama3",
+        messages=[{"role": "user", "content": prompt}]
+    )
+    opik.opik_context.update_current_span(
+        model="llama3",
+        provider="ollama"
+    )
+    return response["message"]["content"]
+```
+
+### LiteLLM
+
+The Opik integration is on the LiteLLM side via callback:
+
+```python
+from litellm.integrations.opik.opik import OpikLogger
 import litellm
 
-track_litellm()
+litellm.callbacks = [OpikLogger()]
 
 # All LiteLLM calls are traced regardless of provider
 response = litellm.completion(
@@ -660,7 +690,21 @@ client = Opik()
 client.flush()
 ```
 
-Or use `flush=True` on the decorator:
+For `@opik.track` decorator usage, use `flush_tracker()`:
+
+```python
+import opik
+
+@opik.track
+def my_pipeline():
+    # Your traced operations
+    pass
+
+my_pipeline()
+opik.flush_tracker()  # Flush data from @opik.track decorator usage
+```
+
+Or use `flush=True` on the decorator for automatic flush on completion:
 
 ```python
 import opik
