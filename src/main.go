@@ -93,6 +93,12 @@ func onPrompt() {
 	}
 	ts := isoNow()
 
+	existingState, _ := LoadState(input.SessionID)
+	turnCount := 1
+	if existingState != nil {
+		turnCount = existingState.TurnCount + 1
+	}
+
 	state := &State{
 		TraceID:    traceID,
 		StartTime:  ts,
@@ -100,12 +106,13 @@ func onPrompt() {
 		Transcript: input.TranscriptPath,
 		StartLine:  startLine,
 		LastFlush:  time.Now().Unix(),
+		TurnCount:  turnCount,
 	}
 	if err := SaveState(state); err != nil {
 		debugLog("save state: %v", err)
 	}
 
-	debugLog("trace=%s start=%d parent=%s", traceID, startLine, config.ParentTraceID)
+	debugLog("trace=%s start=%d parent=%s turn=%d", traceID, startLine, config.ParentTraceID, turnCount)
 
 	if config.ParentTraceID == "" {
 		trace := Trace{
@@ -116,6 +123,11 @@ func onPrompt() {
 			ThreadID:    input.SessionID,
 			Tags:        []string{"claude-code"},
 			Input:       map[string]string{"text": input.Prompt},
+		}
+		if config.BlueprintID != "" {
+			trace.Metadata = map[string]interface{}{
+				"blueprint_id": config.BlueprintID,
+			}
 		}
 		if err := api.Post("/traces", trace); err != nil {
 			debugLog("create trace: %v", err)
@@ -249,6 +261,11 @@ func onCompact() {
 		ProjectName: config.Project,
 		ThreadID:    input.SessionID,
 		Tags:        []string{"claude-code", "compaction"},
+	}
+	if config.BlueprintID != "" {
+		trace.Metadata = map[string]interface{}{
+			"blueprint_id": config.BlueprintID,
+		}
 	}
 	if err := api.Post("/traces", trace); err != nil {
 		debugLog("compact: create trace: %v", err)
@@ -606,6 +623,13 @@ func processTranscriptEntries(traceID string, entries []TranscriptEntry, parentS
 			if p.Model != "" {
 				span.Model = p.Model
 			}
+
+			if cost := estimateCost(p.Model, p.Usage.InputTokens, p.Usage.OutputTokens); cost > 0 {
+				if span.Metadata == nil {
+					span.Metadata = make(map[string]interface{})
+				}
+				span.Metadata["estimated_cost"] = cost
+			}
 		}
 
 		spans = append(spans, span)
@@ -656,6 +680,7 @@ func processToolUse(span *Span, p ParsedEntry, toolResults map[string]*ToolResul
 			subType = st
 		}
 		span.Name = subType + " Subagent"
+		span.Type = "general" // Subagents are orchestration, not tools
 
 		prompt := ""
 		if pr, ok := span.Input["prompt"].(string); ok {
@@ -693,6 +718,43 @@ func compactInput(customInstructions string) string {
 		return "/compact " + customInstructions
 	}
 	return "/compact"
+}
+
+// Per-million-token pricing (input, output) for common models
+var modelCosts = map[string][2]float64{
+	"claude-sonnet-4-20250514":     {3.0, 15.0},
+	"claude-opus-4-20250514":       {15.0, 75.0},
+	"claude-haiku-4-20250506":      {0.80, 4.0},
+	"claude-3-5-sonnet-20241022":   {3.0, 15.0},
+	"claude-3-5-haiku-20241022":    {0.80, 4.0},
+	"claude-3-opus-20240229":       {15.0, 75.0},
+	"claude-3-sonnet-20240229":     {3.0, 15.0},
+	"claude-3-haiku-20240307":      {0.25, 1.25},
+}
+
+func estimateCost(model string, inputTokens, outputTokens int) float64 {
+	costs, ok := modelCosts[model]
+	if !ok {
+		// Try prefix matching for model variants
+		for prefix, c := range modelCosts {
+			if strings.HasPrefix(model, prefix[:min(len(prefix), len(model))]) {
+				costs = c
+				ok = true
+				break
+			}
+		}
+		if !ok {
+			return 0
+		}
+	}
+	return (float64(inputTokens)*costs[0] + float64(outputTokens)*costs[1]) / 1_000_000
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 func categorizeError(errMsg string) *SpanError {

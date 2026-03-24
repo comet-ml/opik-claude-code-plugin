@@ -66,16 +66,17 @@ func (a *API) request(method, endpoint string, data interface{}) error {
 }
 
 type Trace struct {
-	ID          string            `json:"id"`
-	Name        string            `json:"name"`
-	StartTime   string            `json:"start_time"`
-	EndTime     string            `json:"end_time,omitempty"`
-	ProjectName string            `json:"project_name"`
-	ThreadID    string            `json:"thread_id,omitempty"`
-	Tags        []string          `json:"tags,omitempty"`
-	Input       map[string]string `json:"input,omitempty"`
-	Output      map[string]string `json:"output,omitempty"`
-	Model       string            `json:"model,omitempty"`
+	ID          string                 `json:"id"`
+	Name        string                 `json:"name"`
+	StartTime   string                 `json:"start_time"`
+	EndTime     string                 `json:"end_time,omitempty"`
+	ProjectName string                 `json:"project_name"`
+	ThreadID    string                 `json:"thread_id,omitempty"`
+	Tags        []string               `json:"tags,omitempty"`
+	Input       map[string]string      `json:"input,omitempty"`
+	Output      map[string]string      `json:"output,omitempty"`
+	Model       string                 `json:"model,omitempty"`
+	Metadata    map[string]interface{} `json:"metadata,omitempty"`
 }
 
 type Span struct {

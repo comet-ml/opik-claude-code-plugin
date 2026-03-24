@@ -15,6 +15,7 @@ type State struct {
 	StartLine  int    `json:"start_line"`
 	LastFlush  int64  `json:"last_flush"`
 	SlugSent   bool   `json:"slug_sent,omitempty"`
+	TurnCount  int    `json:"turn_count,omitempty"`
 }
 
 type AgentMap map[string]string

@@ -12,7 +12,46 @@ Manual review of LLM outputs doesn't scale. Opik's evaluation platform automates
 
 ## Core Concepts
 
-### Datasets
+### Evaluation Suites (Opik 2.0)
+
+An **Evaluation Suite** is the primary way to test agents in Opik 2.0. It combines test items with assertions and execution policies.
+
+```python
+from opik import Opik
+
+client = Opik()
+suite = client.get_or_create_evaluation_suite(
+    name="my-agent-suite",
+    assertions=[
+        "Response is factually accurate and not hallucinated",
+        "Response is professional in tone",
+    ],
+    execution_policy={"runs_per_item": 3, "pass_threshold": 2},
+)
+
+# Add items with item-level assertions (in addition to suite-level)
+suite.add_item(
+    data={"input": "What is the capital of France?"},
+    assertions=["Response correctly identifies Paris as the capital"],
+)
+
+# Run the suite
+results = suite.run(
+    task=lambda item: {"output": my_agent(item["input"])},
+    model="gpt-4o",
+)
+
+# CI gate
+assert results.all_passed
+```
+
+**Key differences from old Datasets API:**
+- Assertions are plain strings checked by an LLM judge
+- Execution policies support multi-run reliability testing (`runs_per_item`, `pass_threshold`)
+- Item-level assertion overrides for high-stakes items
+- Suites appear under "Evaluation Suites" in the UI sidebar (NOT "Datasets")
+
+### Datasets (Legacy, Still Supported)
 
 A **dataset** is a collection of test cases for evaluating your LLM application.
 
@@ -28,6 +67,35 @@ An **experiment** is a single evaluation run that:
 2. Computes the actual output
 3. Scores the output using one or more metrics
 4. Logs results for analysis
+
+### Thread Evaluation
+
+For conversational agents, evaluate entire threads (multi-turn conversations):
+
+```python
+from opik.evaluation import evaluate_threads
+from opik.evaluation.metrics.conversation import (
+    SessionCompletenessMetric,
+    UserFrustrationMetric,
+    ConversationalCoherenceMetric,
+)
+
+results = evaluate_threads(
+    project_name="chat-agent",
+    metrics=[
+        SessionCompletenessMetric(),
+        UserFrustrationMetric(),
+        ConversationalCoherenceMetric(),
+    ],
+    trace_input_transform=lambda t: t.input["message"],
+    trace_output_transform=lambda t: t.output["response"],
+)
+```
+
+Thread-level metrics:
+- **SessionCompletenessMetric** — Did the conversation reach resolution?
+- **UserFrustrationMetric** — Did the user show signs of frustration?
+- **ConversationalCoherenceMetric** — Did the agent maintain logical consistency across turns?
 
 ## Creating Datasets
 

@@ -70,6 +70,36 @@ print(analysis.explanation)
 print(analysis.suggestions)
 ```
 
+## Blueprints & Configuration Tracking
+
+In production, trace every config change with Blueprints.
+
+### What Blueprints Enable
+
+- **Config Versioning** — Every config edit creates an immutable Blueprint snapshot
+- **Environment Tags** — Point `DEV`, `STAGING`, `PROD` to specific Blueprints
+- **Trace Correlation** — Every trace includes `blueprint_id` metadata showing which config produced it
+- **Rollback** — Move `PROD` tag back to a previous Blueprint if a regression is detected
+- **A/B Testing** — Use MaskIDs to overlay temporary config changes without creating new Blueprints
+
+### Production Config Workflow
+
+1. Agent reads config from the `PROD`-tagged Blueprint
+2. Every trace is stamped with the active `blueprint_id`
+3. Dashboards can filter/group by Blueprint to compare config versions
+4. If a quality regression is detected, roll back `PROD` tag to the previous Blueprint
+
+### MaskID Overlays for A/B Testing
+
+```python
+# MaskIDs let you test config variations without permanent changes
+# The optimizer creates MaskIDs automatically:
+# - mask_001: temperature=0.5
+# - mask_002: temperature=0.9
+# Each candidate is evaluated against the Evaluation Suite
+# The winning config gets promoted to a new Blueprint
+```
+
 ## Dashboards
 
 Create custom views to monitor your LLM applications.

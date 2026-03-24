@@ -1,7 +1,7 @@
 {
   "name": "opik",
-  "version": "0.1.0",
-  "description": "LLM observability tooling for agent development and Claude Code",
+  "version": "0.2.0",
+  "description": "LLM observability tooling for agent development and Claude Code — Opik 2.0 ready",
   "author": {
     "name": "Comet ML",
     "url": "https://comet.com"

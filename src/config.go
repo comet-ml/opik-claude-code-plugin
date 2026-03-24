@@ -17,6 +17,7 @@ type Config struct {
 	Enabled       bool
 	ParentTraceID string
 	RootSpanID    string
+	BlueprintID   string
 }
 
 const truncateMsg = "[ TRUNCATED -- set OPIK_CC_TRUNCATE_FIELDS=false ]"
@@ -50,6 +51,8 @@ func LoadConfig() (*Config, error) {
 	if proj := getEnvOrConfig("OPIK_CC_PROJECT", fileConfig, "project_name"); proj != "" {
 		cfg.Project = proj
 	}
+
+	cfg.BlueprintID = os.Getenv("OPIK_BLUEPRINT_ID")
 
 	return cfg, nil
 }

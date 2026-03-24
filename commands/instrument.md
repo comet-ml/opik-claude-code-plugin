@@ -51,7 +51,126 @@ Now read the code to understand how it actually works. **Follow the execution fl
    - If you can't find where a dependency from the checklist is used, search the entire codebase for its package name as a string
 4. **Identify existing tracing** — check if there's already tracing code. Verify it actually sends to Opik (not a homegrown stub or different tracing system). If it's fake or non-Opik, replace it.
 
-## Step 4: Design the Trace Structure
+## Step 4: Extract Configuration into a Dataclass
+
+After understanding the agent flow, extract hardcoded configuration values into a separate config module.
+
+### What to Extract
+
+Look for hardcoded values in the agent code that control behavior:
+- **Model name**: `"gpt-4o"`, `"claude-3-sonnet"`, etc.
+- **Temperature**: `temperature=0.7`
+- **System prompt**: Any string passed as a system message
+- **Max tokens**: `max_tokens=1024`
+- **Top-p, top-k**: Sampling parameters
+- **API base URLs**: If hardcoded
+- **Any other tunable parameters** that affect agent behavior
+
+### How to Extract
+
+1. **Create a config file** (e.g., `agent_config.py` or in an appropriate module) using `opik.AgentConfig` as the base class:
+
+```python
+from typing import Annotated
+import opik
+
+class AgentConfig(opik.AgentConfig):
+    model: Annotated[str, "LLM model to use"]
+    temperature: Annotated[float, "Sampling temperature"]
+    system_prompt: Annotated[str, "System prompt for the agent"]
+    max_tokens: Annotated[int, "Maximum tokens in response"]
+```
+
+**Important rules for `opik.AgentConfig`:**
+- Subclass `opik.AgentConfig` — do NOT use a plain `@dataclass`
+- Use `Annotated[Type, "description"]` to add field descriptions
+- Do NOT set default values on the class — pass values at instantiation
+- All fields must have type annotations
+
+2. **Create a config instance and use it** in the agent code — replace every hardcoded value:
+
+```python
+from agent_config import AgentConfig
+
+config = AgentConfig(
+    model="gpt-4o",
+    temperature=0.7,
+    system_prompt="You are a helpful assistant.",
+    max_tokens=1024,
+)
+
+# Before: model="gpt-4o", temperature=0.7
+# After:  model=config.model, temperature=config.temperature
+```
+
+3. **Optionally publish the config to Opik** for Blueprint management:
+
+```python
+client = opik.Opik()
+version = client.create_agent_config_version(config, project_name="my-agent")
+```
+
+3. **Do NOT extract**:
+   - API keys or secrets (those stay in env vars)
+   - Structural code logic (only runtime parameters)
+   - Values that are truly constant and never need changing
+
+### Edge Cases
+
+- **Multiple agents**: Create separate config classes per agent, or a shared base
+- **Framework-specific config** (LangChain, CrewAI): Extract parameters from framework constructors
+- **Existing config patterns**: If the project already has a config file, integrate with it rather than creating a new one
+
+## Step 4.5: Detect Conversational Agents and Wire thread_id
+
+Check if the agent handles multi-turn conversations. Look for:
+- **Message history lists** (`messages: list`, `conversation_history`, `chat_history`)
+- **Session/conversation ID parameters** (`session_id`, `conversation_id`, `thread_id`)
+- **Chat loop patterns** (while loops processing user messages)
+- **Stateful turn handling** (appending to message history between calls)
+
+### If Conversational Pattern Detected
+
+Wire `thread_id` to group conversation turns:
+
+1. **If the agent has a natural session identifier** (session_id, conversation_id parameter):
+```python
+@opik.track(entrypoint=True, project_name="chat-agent")
+def handle_message(session_id: str, message: str) -> str:
+    opik.update_current_trace(thread_id=session_id)
+    # ... rest of the function
+```
+
+2. **If no natural session ID exists**, generate one at the session level:
+```python
+import uuid
+
+# Generate once per conversation session
+thread_id = str(uuid.uuid4())
+
+@opik.track(entrypoint=True, project_name="chat-agent")
+def handle_message(message: str) -> str:
+    opik.update_current_trace(thread_id=thread_id)
+    # ... rest of the function
+```
+
+3. **For class-based agents** with session state:
+```python
+class ChatAgent:
+    def __init__(self):
+        self.thread_id = str(uuid.uuid4())
+
+    @opik.track(entrypoint=True, project_name="chat-agent")
+    def handle_message(self, message: str) -> str:
+        opik.update_current_trace(thread_id=self.thread_id)
+        # ...
+```
+
+### If NOT a Conversational Agent
+
+Skip this step. Single-shot agents (one input → one output, no conversation history) do not need `thread_id`.
+
+## Step 4.7: Design the Trace Structure
 
 Before deciding what integration to use where, **map out what a single trace should look like** for one user request. A single request to the agent should produce exactly ONE trace with nested spans — never multiple disconnected traces.
 
@@ -85,14 +204,25 @@ For each node in the tree, decide:
 
 Copy the exact import paths and usage patterns from the reference. Key principles:
 
-1. **Follow the trace tree** — Each node in your trace tree from Step 4 tells you what integration pattern to use. Nodes in the same process as their parent use framework wrappers; nodes across process boundaries use manual `Opik` client tracing with explicit spans.
+1. **Follow the trace tree** — Each node in your trace tree from Step 4.7 tells you what integration pattern to use. Nodes in the same process as their parent use framework wrappers; nodes across process boundaries use manual `Opik` client tracing with explicit spans.
 2. **Trace key functions** — Add `@opik.track` to functions you want visibility into
-3. **Use framework integrations when available** — e.g., `track_openai()` instead of manual `@opik.track` — but only in the main process where a parent trace exists
-4. **Don't double-wrap** — If using an integration, don't also add decorators to the same calls
-5. **Add flush for scripts** — Short-lived scripts need flushing before exit to ensure traces are sent. Use `opik.flush_tracker()` when using `@opik.track` decorators, or `client.flush()` when using the `Opik()` client directly. For TypeScript, use `await client.flush()`.
-6. **Use correct span types** — `general`, `llm`, `tool`, `guardrail` (these are the ONLY valid types — do NOT use `retrieval` or any other type)
-7. **Instrument ALL languages** — if the project has TypeScript files that make LLM calls, instrument them too
-8. **Set a default project name via env var** — Use `OPIK_PROJECT_NAME` env var so traces don't end up in "Default Project". Do NOT hardcode `project_name=` in decorators or client constructors — this prevents users from overriding the project at runtime. Instead, set `os.environ.setdefault("OPIK_PROJECT_NAME", "app-name")` near the entry point, or document that users should set the env var. For TypeScript, use `process.env.OPIK_PROJECT_NAME || "app-name"` when creating the client.
+3. **Mark the entrypoint** — Add `entrypoint=True` to the main/outermost function's `@opik.track` decorator. This is the function that receives the user's input and returns the final output. Exactly ONE function should have `entrypoint=True`. Also add a docstring with `Args:` descriptions (required for the Local Runner to discover the function's input schema). Example:
+   ```python
+   @opik.track(entrypoint=True, project_name="my-agent")
+   def run_agent(question: str, context: str = "") -> str:
+       """Run the agent with a user question.
+
+       Args:
+           question: The user's question to answer.
+           context: Optional additional context.
+       """
+   ```
+4. **Use framework integrations when available** — e.g., `track_openai()` instead of manual `@opik.track` — but only in the main process where a parent trace exists
+5. **Don't double-wrap** — If using an integration, don't also add decorators to the same calls
+6. **Add flush for scripts** — Short-lived scripts need flushing before exit to ensure traces are sent. Use `opik.flush_tracker()` when using `@opik.track` decorators, or `client.flush()` when using the `Opik()` client directly. For TypeScript, use `await client.flush()`.
+7. **Use correct span types** — `general`, `llm`, `tool`, `guardrail` (these are the ONLY valid types — do NOT use `retrieval` or any other type)
+8. **Instrument ALL languages** — if the project has TypeScript files that make LLM calls, instrument them too
+9. **Set a default project name via env var** — Use `OPIK_PROJECT_NAME` env var so traces don't end up in "Default Project". Do NOT hardcode `project_name=` in decorators or client constructors — this prevents users from overriding the project at runtime. Instead, set `os.environ.setdefault("OPIK_PROJECT_NAME", "app-name")` near the entry point, or document that users should set the env var. For TypeScript, use `process.env.OPIK_PROJECT_NAME || "app-name"` when creating the client.
 
 ## Step 6: Install Dependencies
 
@@ -128,6 +258,14 @@ After instrumenting:
    - Covered: `openai` — wrapped with `track_openai()` in `providers/oai.py`
    - Covered: `langchain` — added `OpikTracer` callback in `tools/summarize.py`
    - NOT covered: `some-framework` — could not find where it's used in the codebase (ask user)
-3. **Explain what was added and why**
-4. **Show the key changes made**
-5. **List any configuration the user still needs to set up** (e.g., `opik configure` if not already configured, environment variables)
+3. **Verify Opik 2.0 features**:
+   - **Config extraction**: Confirm a config dataclass was created and the agent reads from it
+   - **Entrypoint**: Confirm exactly one function has `entrypoint=True` with a docstring
+   - **Thread ID** (if conversational): Confirm `thread_id` is wired from the session identifier
+4. **Explain what was added and why**
+5. **Show the key changes made**
+6. **List any configuration the user still needs to set up** (e.g., `opik configure` if not already configured, environment variables)
+7. **Next steps**: Suggest the user can now:
+   - Run `opik connect` to pair with Opik UI for remote triggering
+   - Create an Evaluation Suite with `/opik:create-eval-suite`
+   - View traces and configuration in the Opik UI

@@ -9,6 +9,89 @@ Building production-grade agents requires:
 2. **Evaluation** - Measure performance systematically
 3. **Optimization** - Improve based on data
 
+## Agent Configuration Lifecycle
+
+Before diving into observability, externalize your agent's configuration.
+
+### Step 1: Extract Config
+
+Move hardcoded values into an `opik.AgentConfig` subclass:
+
+```python
+from typing import Annotated
+import opik
+
+class AgentConfig(opik.AgentConfig):
+    model: Annotated[str, "LLM model to use"]
+    temperature: Annotated[float, "Sampling temperature"]
+    system_prompt: Annotated[str, "System prompt for the agent"]
+    max_tokens: Annotated[int, "Maximum tokens in response"]
+```
+
+### Step 2: Mark the Entrypoint
+
+Add `entrypoint=True` to the main function and include a docstring:
+
+```python
+config = AgentConfig(
+    model="gpt-4o",
+    temperature=0.7,
+    system_prompt="You are a helpful research assistant.",
+    max_tokens=1024,
+)
+
+@opik.track(entrypoint=True, project_name="research-agent")
+def agent(query: str) -> str:
+    """Run the research agent.
+
+    Args:
+        query: The research question to investigate.
+    """
+    return llm_call(
+        model=config.model,
+        temperature=config.temperature,
+        system_prompt=config.system_prompt,
+        max_tokens=config.max_tokens,
+        user_message=query,
+    )
+```
+
+### Step 3: Connect for UI Triggering
+
+```bash
+# Cloud (API key configured)
+opik connect
+
+# OSS (pair code from Opik UI)
+opik connect --pair ABCDEF
+```
+
+### Step 4: Iterate via Blueprints
+
+1. Edit config in Opik UI → new Blueprint created
+2. Move `DEV` tag to new Blueprint
+3. Test with Evaluation Suite
+4. If passing, move `PROD` tag
+
+### Thread Tracking for Conversational Agents
+
+If your agent handles multi-turn conversations, wire `thread_id`:
+
+```python
+@opik.track(entrypoint=True, project_name="chat-agent")
+def handle_message(session_id: str, message: str) -> str:
+    """Handle a chat message.
+
+    Args:
+        session_id: Conversation session identifier.
+        message: The user's message.
+    """
+    opik.update_current_trace(thread_id=session_id)
+    return generate_response(session_id, message)
+```
+
+All turns sharing a `session_id` are grouped into one thread in the Threads tab.
+
 ## Start with Observability
 
 Before evaluating, make your agent's behavior transparent.

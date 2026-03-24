@@ -1,11 +1,11 @@
 ---
 name: opik
-description: This skill should be used when the user needs to add Opik tracing or integrations to their code, instrument an LLM application, or needs reference for Opik SDK usage (Python, TypeScript, REST API). Use for tasks like "add tracing", "instrument my code", "use track_openai", "add OpikTracer", "what span types are available", "how to flush traces".
+description: This skill should be used when the user needs to add Opik tracing or integrations to their code, instrument an LLM application, or needs reference for Opik SDK usage (Python, TypeScript, REST API). Use for tasks like "add tracing", "instrument my code", "use track_openai", "add OpikTracer", "what span types are available", "how to flush traces", "add entrypoint", "extract config", "add thread_id".
 ---
 
 # Opik SDK Reference
 
-Opik is an open-source LLM observability platform. This skill covers the SDK: tracing, integrations, span types, and how to instrument code.
+Opik is an open-source LLM observability platform. This skill covers the SDK: tracing, integrations, span types, configuration, threads, and how to instrument code.
 
 ## Core Concepts
 
@@ -24,13 +24,38 @@ A **trace** is a complete execution path (one user request → one response). **
 
 **These are the ONLY valid span types.** Do NOT use `retrieval` or any other type.
 
+### Key Opik 2.0 Parameters
+
+| Parameter | Purpose |
+|-----------|---------|
+| `entrypoint=True` | Marks the main function — enables Local Runner triggering from UI |
+| `thread_id` | Groups multi-turn traces into a conversation thread |
+| Config dataclass | Externalizes model/temperature/prompt into a managed config (Blueprints) |
+
 ## Python Quick Start
 
 ```python
 import opik
+from typing import Annotated
 
-@opik.track(name="my_agent", type="general")
+class AgentConfig(opik.AgentConfig):
+    model: Annotated[str, "LLM model to use"]
+    temperature: Annotated[float, "Sampling temperature"]
+    system_prompt: Annotated[str, "System prompt"]
+
+config = AgentConfig(
+    model="gpt-4o",
+    temperature=0.7,
+    system_prompt="You are a helpful assistant.",
+)
+
+@opik.track(entrypoint=True, name="my_agent")
 def agent(query: str) -> str:
+    """Run the agent.
+
+    Args:
+        query: User question to answer.
+    """
     context = retrieve(query)
     return generate(query, context)
 
@@ -40,7 +65,7 @@ def retrieve(query: str) -> list:
 
 @opik.track(type="llm")
 def generate(query: str, context: list) -> str:
-    return llm_call(query, context)
+    return llm_call(query, context, model=config.model, temperature=config.temperature)
 
 # Nested calls automatically create child spans
 result = agent("What is ML?")
@@ -109,7 +134,7 @@ track_adk_agent_recursive(agent, opik_tracer)
 
 | Topic | Reference File |
 |-------|----------------|
-| Python SDK (decorators, context, async, distributed tracing) | `references/tracing-python.md` |
+| Python SDK (decorators, context, async, distributed, config, entrypoint, threads) | `references/tracing-python.md` |
 | TypeScript SDK (client, decorators, framework integrations) | `references/tracing-typescript.md` |
 | REST API (HTTP endpoints, authentication) | `references/tracing-rest-api.md` |
 | All integrations with code snippets | `references/integrations.md` |

@@ -40,10 +40,85 @@ import opik
     project_name="my-project",     # Override project
     tags=["production", "v2"],     # Add tags
     metadata={"version": "1.0"},   # Add metadata
-    flush=True                     # Flush immediately (for scripts)
+    flush=True,                    # Flush immediately (for scripts)
+    entrypoint=True,               # Mark as agent entry point (enables Local Runner)
 )
 def my_function():
     pass
+```
+
+### Entrypoint Functions
+
+Mark the main agent function with `entrypoint=True` to enable:
+- **Local Runner triggering** — agent can be started from the Opik UI via `opik connect`
+- **Schema discovery** — Opik reads the function's docstring to build an input form in the UI
+
+```python
+@opik.track(entrypoint=True, project_name="my-agent")
+def run_agent(question: str, context: str = "") -> str:
+    """Run the agent with a user question.
+
+    Args:
+        question: The user's question to answer.
+        context: Optional additional context.
+    """
+    return generate_response(question, context)
+```
+
+### Agent Configuration Pattern
+
+Externalize hardcoded config values into an `opik.AgentConfig` subclass:
+
+```python
+from typing import Annotated
+import opik
+
+class AgentConfig(opik.AgentConfig):
+    model: Annotated[str, "LLM model to use"]
+    temperature: Annotated[float, "Sampling temperature"]
+    system_prompt: Annotated[str, "System prompt"]
+    max_tokens: Annotated[int, "Maximum tokens"]
+
+config = AgentConfig(
+    model="gpt-4o",
+    temperature=0.7,
+    system_prompt="You are a helpful assistant.",
+    max_tokens=1024,
+)
+
+@opik.track(entrypoint=True, project_name="my-agent")
+def run_agent(question: str) -> str:
+    response = client.chat.completions.create(
+        model=config.model,
+        temperature=config.temperature,
+        messages=[
+            {"role": "system", "content": config.system_prompt},
+            {"role": "user", "content": question},
+        ],
+        max_tokens=config.max_tokens,
+    )
+    return response.choices[0].message.content
+
+# Publish config to Opik
+opik_client = opik.Opik()
+opik_client.create_agent_config_version(config, project_name="my-agent")
+```
+
+### Thread ID for Conversational Agents
+
+Group multi-turn conversations into threads:
+
+```python
+@opik.track(entrypoint=True, project_name="chat-agent")
+def handle_message(session_id: str, message: str) -> str:
+    """Handle a chat message.
+
+    Args:
+        session_id: Conversation session identifier.
+        message: The user's message.
+    """
+    opik.update_current_trace(thread_id=session_id)
+    return generate_response(session_id, message)
 ```
 
 ### Nested Functions

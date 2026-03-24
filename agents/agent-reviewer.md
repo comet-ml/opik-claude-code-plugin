@@ -287,9 +287,9 @@ Evaluate resource consumption:
 - Unbounded agent loops that burn tokens
 - No budget alerts or hard caps
 
-### 10. Observability
+### 10. Observability & Opik 2.0 Patterns
 
-Evaluate monitoring and debugging capabilities:
+Evaluate monitoring, debugging, and Opik 2.0 compliance:
 
 **Trace Initialization (Critical):**
 - Tracing starts BEFORE agent execution, not after
@@ -298,10 +298,17 @@ Evaluate monitoring and debugging capabilities:
 - Trace input matches actual agent input (enables replay)
 - Trace ID available from first instruction
 
+**Opik 2.0 Requirements (Critical):**
+- **`entrypoint=True`**: The main agent function MUST have `entrypoint=True` in its `@opik.track` decorator. Without this, the agent cannot be triggered via the Local Runner.
+- **Docstring with Args**: The entrypoint function MUST have a docstring with `Args:` descriptions. The Local Runner uses this for schema discovery.
+- **Configuration externalized**: Hardcoded model names, temperatures, system prompts, and max_tokens SHOULD be extracted into an `opik.AgentConfig` subclass (not left inline). This enables Blueprint management via the Opik UI.
+- **`thread_id` for conversations**: If the agent handles multi-turn conversations (has message history, chat loops, session state), it MUST set `thread_id` on traces. Without this, conversation turns appear as unrelated traces and thread-level metrics don't work.
+- **Evaluation Suites**: Code should use `get_or_create_evaluation_suite()` for testing, NOT the old `get_or_create_dataset()` API.
+
 **Tracing:**
 - Full execution traces with input/output capture
 - Span hierarchy showing tool calls and reasoning
-- Correct span types used: `general`, `tool`, `llm`, `retrieval`, `guardrail`
+- Correct span types used: `general`, `tool`, `llm`, `guardrail` (NOT `retrieval`)
 - Correlation IDs across distributed components
 - Complete request lifecycle from input to final output
 
@@ -322,7 +329,7 @@ Evaluate monitoring and debugging capabilities:
 - Task completion rates
 
 **Evaluation:**
-- Pre-production quality checks
+- Pre-production quality checks via Evaluation Suites
 - Production monitoring for drift/regression
 - Feedback loops for continuous improvement
 - Agent-specific metrics: task completion, tool correctness, trajectory accuracy
@@ -338,6 +345,11 @@ Evaluate monitoring and debugging capabilities:
 - No metrics on performance or cost
 - No way to debug failed executions
 - No alerting for anomalies
+- **Missing `entrypoint=True`** on the main agent function
+- **Missing config dataclass** — hardcoded model/temperature/prompt values
+- **Missing `thread_id`** in a conversational agent
+- **Using old Datasets API** instead of Evaluation Suites
+- **Missing docstring** on the entrypoint function
 
 ### 11. State Management
 
@@ -410,6 +422,15 @@ Structure your review as follows:
 - [ ] Metrics for latency, cost, success rate
 - [ ] Alerting for anomalies
 - [ ] Debug mode for development
+
+### Opik 2.0 Checklist
+
+- [ ] `entrypoint=True` on the main agent function
+- [ ] Docstring with `Args:` on the entrypoint function
+- [ ] Config externalized into `opik.AgentConfig` subclass (no hardcoded model/temperature/prompt)
+- [ ] `thread_id` set for conversational agents (multi-turn)
+- [ ] Uses Evaluation Suites API, NOT old Datasets API
+- [ ] Span types are correct (`general`, `llm`, `tool`, `guardrail` — NOT `retrieval`)
 
 ### Resource Management Checklist
 
