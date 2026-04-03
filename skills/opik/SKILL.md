@@ -107,10 +107,10 @@ track_adk_agent_recursive(agent, opik_tracer)
 
 ## Detailed References
 
-| Topic | Reference File |
-|-------|----------------|
-| Python SDK (decorators, context, async, distributed tracing, configure) | `references/tracing-python.md` |
-| TypeScript SDK (client, decorators, framework integrations) | `references/tracing-typescript.md` |
-| REST API (HTTP endpoints, authentication) | `references/tracing-rest-api.md` |
-| All integrations with code snippets | `references/integrations.md` |
-| Core concepts (traces, spans, threads, metadata, feedback) | `references/observability.md` |
+| Topic                                                                       | Reference File |
+|-----------------------------------------------------------------------------|----------------|
+| Python SDK (decorators, context, async, distributed tracing, configuration) | `references/tracing-python.md` |
+| TypeScript SDK (client, decorators, framework integrations)                 | `references/tracing-typescript.md` |
+| REST API (HTTP endpoints, authentication)                                   | `references/tracing-rest-api.md` |
+| All integrations with code snippets                                         | `references/integrations.md` |
+| Core concepts (traces, spans, threads, metadata, feedback)                  | `references/observability.md` |
