@@ -9,6 +9,32 @@ pip install opik
 opik configure  # Interactive setup
 ```
 
+Or configure programmatically:
+
+```python
+# Signature:
+# opik.configure(
+#     api_key: Optional[str] = None,
+#     workspace: Optional[str] = None,
+#     url: Optional[str] = None,          # Deprecated: use url_override instead
+#     url_override: Optional[str] = None,
+#     use_local: bool = False,
+#     force: bool = False,
+#     automatic_approvals: bool = False,
+# ) -> None
+
+import opik
+
+# Opik Cloud
+opik.configure(api_key="your-api-key", workspace="your-workspace")
+
+# Local deployment
+opik.configure(url_override="http://localhost:5173/api", use_local=True)
+
+# Force overwrite existing config
+opik.configure(api_key="new-key", force=True)
+```
+
 Or set environment variables:
 ```bash
 export OPIK_API_KEY="your-api-key"
