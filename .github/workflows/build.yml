@@ -1,15 +1,17 @@
 name: Build
 
+# PR check only: confirms the Go source compiles for every target platform.
+# Binaries are NOT committed here — they are rebuilt and committed by the
+# Release workflow (release.yml) so bin/ and the version always move together.
 on:
-  push:
-    branches: [main]
+  pull_request:
     paths:
       - 'src/**'
       - 'go.mod'
       - 'Makefile'
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build:
@@ -20,21 +22,10 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.21'
+          go-version: '1.21.13'
 
-      - name: Build binaries
+      - name: Vet
+        run: go vet ./src
+
+      - name: Build binaries (compile check)
         run: make build
-
-      - name: Check for changes
-        id: changes
-        run: |
-          git diff --quiet bin/ || echo "changed=true" >> $GITHUB_OUTPUT
-
-      - name: Commit binaries
-        if: steps.changes.outputs.changed == 'true'
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add bin/
-          git commit -m "Build: update binaries [skip ci]"
-          git push
