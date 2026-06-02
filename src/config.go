@@ -50,7 +50,7 @@ func LoadConfig() (*Config, error) {
 	// OPIK_CC_PROJECT / cc_project are plugin-scoped and don't affect the Opik
 	// SDK. project_name is kept as a fallback for backward compatibility, but it
 	// is shared with the Opik SDK config in ~/.opik.config.
-	if proj := getEnvOrConfig("OPIK_CC_PROJECT", fileConfig, "cc_project"); proj != "" {
+	if proj := getEnvOrConfig("OPIK_CC_PROJECT", fileConfig, "cc_project_name"); proj != "" {
 		cfg.Project = proj
 	} else if proj := fileConfig["project_name"]; proj != "" {
 		cfg.Project = proj

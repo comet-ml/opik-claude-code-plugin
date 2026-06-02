@@ -72,12 +72,12 @@ set in `~/.opik.config` via the plugin-scoped `cc_workspace` and `cc_project` ke
 [opik]
 workspace = my-sdk-workspace      # used by the Opik SDK
 project_name = my-sdk-project     # used by the Opik SDK
-cc_workspace = my-cc-workspace    # used only by the Claude Code plugin
-cc_project = my-cc-project         # used only by the Claude Code plugin
+cc_workspace = my-cc-workspace        # used only by the Claude Code plugin
+cc_project_name = my-cc-project       # used only by the Claude Code plugin
 ```
 
-> Note: for backward compatibility, if `cc_project` is not set the plugin still falls back to
-> the shared `project_name` key.
+> Note: for backward compatibility, if `cc_project_name` is not set the plugin still falls back
+> to the shared `project_name` key.
 
 ### External Trace Linking
 
