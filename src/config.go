@@ -51,6 +51,12 @@ func LoadConfig() (*Config, error) {
 		cfg.Project = proj
 	}
 
+	// Allow overriding the workspace for the Claude Code plugin only, without
+	// affecting the global OPIK_WORKSPACE / ~/.opik.config used by the Opik SDK.
+	if ws := getEnvOrConfig("OPIK_CC_WORKSPACE", fileConfig, "cc_workspace"); ws != "" {
+		cfg.Workspace = ws
+	}
+
 	return cfg, nil
 }
 
