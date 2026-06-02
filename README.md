@@ -121,15 +121,22 @@ Enable/disable automatic tracing of your Claude Code sessions to Opik.
 /opik:trace-claude-code start                 # Enable tracing for this project
 /opik:trace-claude-code start --debug         # Enable tracing + debug logging
 /opik:trace-claude-code stop                  # Disable tracing for this project
-/opik:trace-claude-code status                # Check current tracing status
+/opik:trace-claude-code status                # Check project + global + effective state
 
 /opik:trace-claude-code start --global        # Enable tracing for all projects
 /opik:trace-claude-code stop --global         # Disable tracing globally
 ```
 
-Tracing state is stored in `.claude/.opik-tracing-enabled` (project) or `~/.claude/.opik-tracing-enabled` (global). Project settings take precedence.
+Tracing state is stored in `.claude/.opik-tracing-enabled` (project) or `~/.claude/.opik-tracing-enabled` (global). Resolution order (first match wins):
 
-**Note:** Restart Claude Code sessions for changes to take effect.
+1. Project file containing `off`/`disabled` → **disabled** (opt a single project out of a global enable)
+2. Project file present → **enabled** (`debug` content also enables debug logging)
+3. Global file present → **enabled** (same content rules)
+4. Neither → **disabled**
+
+So the project setting always takes precedence over the global one. Running `stop` in a project while global tracing is on writes the `off` opt-out for that project rather than removing the global enable.
+
+**Note:** Changes take effect immediately for new conversation turns (no restart needed).
 
 ### `/opik:instrument` - Add Observability to Your Code
 
