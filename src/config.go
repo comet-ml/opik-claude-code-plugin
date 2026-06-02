@@ -88,19 +88,31 @@ type tracingState struct {
 }
 
 func checkTracingFile(path string) (tracingState, bool) {
-	if _, err := os.Stat(path); err == nil {
-		state := tracingState{enabled: true}
-		if data, err := os.ReadFile(path); err == nil {
-			state.debug = strings.TrimSpace(string(data)) == "debug"
-		}
-		return state, true
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return tracingState{}, false
 	}
-	return tracingState{}, false
+	content := strings.TrimSpace(string(data))
+	// Explicit opt-out: lets a single project turn tracing off even when it is
+	// enabled globally via ~/.claude/.opik-tracing-enabled.
+	if content == "off" || content == "disabled" {
+		return tracingState{enabled: false}, true
+	}
+	return tracingState{enabled: true, debug: content == "debug"}, true
 }
 
 func getTracingState() tracingState {
+	// Project-level marker takes precedence, including an explicit "off" opt-out
+	// that wins over a global enable.
 	if projectDir := os.Getenv("CLAUDE_PROJECT_DIR"); projectDir != "" {
 		if state, found := checkTracingFile(filepath.Join(projectDir, ".claude", ".opik-tracing-enabled")); found {
+			return state
+		}
+	}
+
+	// Fall back to a user-level marker so tracing can be enabled for all projects.
+	if homeDir, err := os.UserHomeDir(); err == nil && homeDir != "" {
+		if state, found := checkTracingFile(filepath.Join(homeDir, ".claude", ".opik-tracing-enabled")); found {
 			return state
 		}
 	}
