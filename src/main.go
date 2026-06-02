@@ -93,13 +93,16 @@ func onPrompt() {
 	}
 	ts := isoNow()
 
+	cwd, headStart := captureCwdAndHead()
 	state := &State{
-		TraceID:    traceID,
-		StartTime:  ts,
-		SessionID:  input.SessionID,
-		Transcript: input.TranscriptPath,
-		StartLine:  startLine,
-		LastFlush:  time.Now().Unix(),
+		TraceID:      traceID,
+		StartTime:    ts,
+		SessionID:    input.SessionID,
+		Transcript:   input.TranscriptPath,
+		StartLine:    startLine,
+		LastFlush:    time.Now().Unix(),
+		Cwd:          cwd,
+		HeadSHAStart: headStart,
 	}
 	if err := SaveState(state); err != nil {
 		debugLog("save state: %v", err)
@@ -117,6 +120,7 @@ func onPrompt() {
 			Tags:        []string{"claude-code"},
 			Input:       map[string]string{"text": input.Prompt},
 		}
+		loadClaudeIdentity().applyToTrace(&trace)
 		if err := api.Post("/traces", trace); err != nil {
 			debugLog("create trace: %v", err)
 		}
@@ -135,9 +139,10 @@ func onTool() {
 		debugLog("flushing (%ds)", now-state.LastFlush)
 		flush(state)
 		state.LastFlush = now
-		if err := SaveState(state); err != nil {
-			debugLog("save state: %v", err)
-		}
+	}
+
+	if err := SaveState(state); err != nil {
+		debugLog("save state: %v", err)
 	}
 }
 
@@ -151,6 +156,7 @@ func onStop() {
 	}
 
 	flush(state)
+	postTraceMetrics(state)
 
 	output := getLastOutput(state)
 	ts := isoNow()
@@ -180,6 +186,7 @@ func onSessionEnd() {
 	state, err := LoadState(input.SessionID)
 	if err == nil {
 		flush(state)
+		postTraceMetrics(state)
 		ts := isoNow()
 		finalUpdate := map[string]interface{}{
 			"project_name": config.Project,
@@ -202,13 +209,17 @@ func onCompact() {
 			traceID = uuid7()
 		}
 		ts := isoNow()
+		startLine := countLines(input.TranscriptPath)
+		cwd, headStart := captureCwdAndHead()
 		state = &State{
-			TraceID:    traceID,
-			StartTime:  ts,
-			SessionID:  input.SessionID,
-			Transcript: input.TranscriptPath,
-			StartLine:  countLines(input.TranscriptPath),
-			LastFlush:  time.Now().Unix(),
+			TraceID:      traceID,
+			StartTime:    ts,
+			SessionID:    input.SessionID,
+			Transcript:   input.TranscriptPath,
+			StartLine:    startLine,
+			LastFlush:    time.Now().Unix(),
+			Cwd:          cwd,
+			HeadSHAStart: headStart,
 		}
 
 		if config.ParentTraceID == "" {
@@ -220,6 +231,7 @@ func onCompact() {
 				ThreadID:    input.SessionID,
 				Tags:        []string{"claude-code"},
 			}
+			loadClaudeIdentity().applyToTrace(&trace)
 			if err := api.Post("/traces", trace); err != nil {
 				debugLog("compact: create trace: %v", err)
 			}
@@ -230,6 +242,7 @@ func onCompact() {
 		}
 	} else {
 		flush(state)
+		postTraceMetrics(state)
 	}
 
 	compactTraceID := uuid7()
@@ -250,6 +263,7 @@ func onCompact() {
 		ThreadID:    input.SessionID,
 		Tags:        []string{"claude-code", "compaction"},
 	}
+	loadClaudeIdentity().applyToTrace(&trace)
 	if err := api.Post("/traces", trace); err != nil {
 		debugLog("compact: create trace: %v", err)
 	}
@@ -272,6 +286,7 @@ func onCompact() {
 	state.TraceID = compactTraceID
 	state.StartLine = countLines(input.TranscriptPath)
 	state.LastFlush = time.Now().Unix()
+	state.Cwd, state.HeadSHAStart = captureCwdAndHead()
 	if err := SaveState(state); err != nil {
 		debugLog("save state: %v", err)
 	}
@@ -802,3 +817,4 @@ func debugLog(format string, args ...interface{}) {
 	fmt.Fprintf(f, "[%s] ", ts)
 	fmt.Fprintf(f, format+"\n", args...)
 }
+
