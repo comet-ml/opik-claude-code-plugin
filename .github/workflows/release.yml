@@ -1,29 +1,71 @@
 name: Release
 
+# Manually triggered from the Actions tab (or `gh workflow run release.yml -f version=0.3.1`).
+# Bumps the version, rebuilds binaries, commits both to main, tags, and publishes
+# the GitHub release in one atomic step so bin/ and the version never drift.
 on:
-  release:
-    types: [created]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version, e.g. 0.3.1 (no leading v)'
+        required: true
+        type: string
 
 permissions:
   contents: write
 
 jobs:
-  build:
+  release:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          # PAT (org secret) so this job can push the release commit to the
+          # protected main branch. The default GITHUB_TOKEN / github-actions[bot]
+          # cannot bypass branch protection.
+          token: ${{ secrets.GH_PAT_TO_ACCESS_GITHUB_API }}
+
+      - name: Validate version format
+        run: |
+          if ! [[ "${{ inputs.version }}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Invalid version '${{ inputs.version }}'. Expected X.Y.Z"
+            exit 1
+          fi
 
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.21'
+          # Pinned to an exact patch so binaries are reproducible across runs.
+          go-version: '1.21.13'
+
+      - name: Bump version in plugin.json
+        run: |
+          tmp=$(mktemp)
+          jq --arg v "${{ inputs.version }}" '.version = $v' .claude-plugin/plugin.json > "$tmp"
+          mv "$tmp" .claude-plugin/plugin.json
+          echo "plugin.json now at version ${{ inputs.version }}"
 
       - name: Build binaries
         run: make build
 
-      - name: Upload binaries to release
+      - name: Commit, tag, and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions@comet.com"
+          git add .claude-plugin/plugin.json bin/
+          git commit -m "chore: release v${{ inputs.version }}"
+          git tag -a "${{ inputs.version }}" -m "Release v${{ inputs.version }}"
+          git push origin main
+          git push origin "${{ inputs.version }}"
+
+      - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ inputs.version }}
+          name: ${{ inputs.version }}
+          generate_release_notes: true
           files: |
             bin/opik-logger-darwin-arm64
             bin/opik-logger-darwin-amd64
