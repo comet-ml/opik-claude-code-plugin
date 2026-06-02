@@ -47,8 +47,19 @@ func LoadConfig() (*Config, error) {
 		RootSpanID:    os.Getenv("OPIK_CC_ROOT_SPAN_ID"),
 	}
 
-	if proj := getEnvOrConfig("OPIK_CC_PROJECT", fileConfig, "project_name"); proj != "" {
+	// OPIK_CC_PROJECT / cc_project are plugin-scoped and don't affect the Opik
+	// SDK. project_name is kept as a fallback for backward compatibility, but it
+	// is shared with the Opik SDK config in ~/.opik.config.
+	if proj := getEnvOrConfig("OPIK_CC_PROJECT", fileConfig, "cc_project_name"); proj != "" {
 		cfg.Project = proj
+	} else if proj := fileConfig["project_name"]; proj != "" {
+		cfg.Project = proj
+	}
+
+	// Allow overriding the workspace for the Claude Code plugin only, without
+	// affecting the global OPIK_WORKSPACE / ~/.opik.config used by the Opik SDK.
+	if ws := getEnvOrConfig("OPIK_CC_WORKSPACE", fileConfig, "cc_workspace"); ws != "" {
+		cfg.Workspace = ws
 	}
 
 	return cfg, nil

@@ -57,10 +57,27 @@ This creates `~/.opik.config` with your API URL, key, and workspace.
 
 ```bash
 export OPIK_CC_PROJECT="my-project"         # Project name (default: claude-code)
+export OPIK_CC_WORKSPACE="my-workspace"     # Workspace override (default: OPIK_WORKSPACE / ~/.opik.config)
 export OPIK_CC_TRUNCATE_FIELDS="false"      # Don't truncate large fields
 ```
 
 All plugin env vars use the `OPIK_CC_` prefix to avoid conflicts with standard Opik SDK variables.
+
+`OPIK_CC_WORKSPACE` and `OPIK_CC_PROJECT` let you send Claude Code traces to a different
+workspace/project than the rest of your Opik setup, without touching the global
+`OPIK_WORKSPACE` / `project_name` in `~/.opik.config` used by the Opik SDK. Both can also be
+set in `~/.opik.config` via the plugin-scoped `cc_workspace` and `cc_project` keys:
+
+```ini
+[opik]
+workspace = my-sdk-workspace      # used by the Opik SDK
+project_name = my-sdk-project     # used by the Opik SDK
+cc_workspace = my-cc-workspace        # used only by the Claude Code plugin
+cc_project_name = my-cc-project       # used only by the Claude Code plugin
+```
+
+> Note: for backward compatibility, if `cc_project_name` is not set the plugin still falls back
+> to the shared `project_name` key.
 
 ### External Trace Linking
 
