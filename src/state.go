@@ -8,13 +8,16 @@ import (
 )
 
 type State struct {
-	TraceID    string `json:"trace_id"`
-	StartTime  string `json:"start_time"`
-	SessionID  string `json:"session_id"`
-	Transcript string `json:"transcript"`
-	StartLine  int    `json:"start_line"`
-	LastFlush  int64  `json:"last_flush"`
-	SlugSent   bool   `json:"slug_sent,omitempty"`
+	TraceID      string `json:"trace_id"`
+	StartTime    string `json:"start_time"`
+	SessionID    string `json:"session_id"`
+	Transcript   string `json:"transcript"`
+	StartLine    int    `json:"start_line"`
+	LastFlush    int64  `json:"last_flush"`
+	SlugSent     bool   `json:"slug_sent,omitempty"`
+	Cwd          string `json:"cwd,omitempty"`
+	HeadSHAStart string `json:"head_sha_start,omitempty"`
+	UserEmail    string `json:"user_email,omitempty"`
 }
 
 type AgentMap map[string]string
