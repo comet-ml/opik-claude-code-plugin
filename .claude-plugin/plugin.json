@@ -1,6 +1,6 @@
 {
   "name": "opik",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "description": "LLM observability tooling for agent development and Claude Code",
   "author": {
     "name": "Comet ML",
