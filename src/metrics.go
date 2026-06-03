@@ -171,27 +171,9 @@ func captureCwdAndHead() (cwd, head string) {
 	return
 }
 
-// putScore PUTs a single feedback score onto a trace. Errors are logged and
-// swallowed — metric posting must never block trace flow.
-func putScore(traceID, name string, value float64, category string) {
-	body := map[string]interface{}{
-		"name":   name,
-		"value":  value,
-		"source": "sdk",
-	}
-	if category != "" {
-		if len(category) > 300 {
-			category = category[:300]
-		}
-		body["category_name"] = category
-	}
-	if err := api.Put("/traces/"+traceID+"/feedback-scores", body); err != nil {
-		debugLog("put_score %s=%v: %v", name, value, err)
-	}
-}
-
 // postTraceMetrics computes git-grounded metrics for the closing trace and
-// posts them as feedback scores. Cheap (~few hundred ms total).
+// merges them into trace.metadata.cc. Feedback scores stay reserved for
+// evaluative judgments — task_class and summary — written by other workers.
 func postTraceMetrics(state *State) {
 	cwd := state.Cwd
 	if cwd == "" {
@@ -201,7 +183,6 @@ func postTraceMetrics(state *State) {
 		debugLog("postTraceMetrics: no cwd")
 		return
 	}
-	// Bail if not a git working tree.
 	if git(cwd, "rev-parse", "--is-inside-work-tree") != "true" {
 		debugLog("postTraceMetrics: %s is not a git work tree", cwd)
 		return
@@ -211,32 +192,68 @@ func postTraceMetrics(state *State) {
 
 	repo := repoName(cwd)
 	branch := git(cwd, "branch", "--show-current")
+	// HEAD as of trace close; pairs with state.HeadSHAStart captured at onPrompt.
 	headEnd := git(cwd, "rev-parse", "HEAD")
 	commits, insC, delC := commitsBetween(cwd, state.HeadSHAStart, headEnd)
 	filesU, insU, delU := parseShortstat(git(cwd, "diff", "HEAD", "--shortstat"))
 
+	metrics := map[string]interface{}{
+		"commits_in_trace":  commits,
+		"lines_committed":   insC + delC,
+		"uncommitted_lines": insU + delU,
+		"uncommitted_files": filesU,
+		"files_authored":    len(agg.Files),
+		"lines_authored":    agg.LinesAuthored,
+		"lines_overwritten": agg.LinesOverwritten,
+	}
 	if repo != "" {
-		putScore(state.TraceID, "cc.repository", 1, repo)
+		metrics["repository"] = repo
 	}
 	if branch != "" {
-		putScore(state.TraceID, "cc.branch", 1, branch)
+		metrics["branch"] = branch
 	}
 	if state.HeadSHAStart != "" {
-		putScore(state.TraceID, "cc.head_sha_start", 1, shortSHA(state.HeadSHAStart))
+		metrics["head_sha_start"] = shortSHA(state.HeadSHAStart)
 	}
 	if headEnd != "" {
-		putScore(state.TraceID, "cc.head_sha_end", 1, shortSHA(headEnd))
+		metrics["head_sha_end"] = shortSHA(headEnd)
 	}
-	putScore(state.TraceID, "cc.commits_in_trace", float64(commits), "")
-	putScore(state.TraceID, "cc.lines_committed", float64(insC+delC), "")
-	putScore(state.TraceID, "cc.uncommitted_lines", float64(insU+delU), "")
-	putScore(state.TraceID, "cc.uncommitted_files", float64(filesU), "")
-	putScore(state.TraceID, "cc.files_authored", float64(len(agg.Files)), "")
-	putScore(state.TraceID, "cc.lines_authored", float64(agg.LinesAuthored), "")
-	putScore(state.TraceID, "cc.lines_overwritten", float64(agg.LinesOverwritten), "")
+
+	mergeMetadataCC(state.TraceID, metrics)
 
 	debugLog("metrics %s  repo=%s  branch=%s  commits=%d  +-=%d  uncommitted=%d  files=%d  authored=%d  overwritten=%d",
 		state.TraceID[:8], repo, branch, commits, insC+delC, insU+delU, len(agg.Files), agg.LinesAuthored, agg.LinesOverwritten)
+}
+
+// mergeMetadataCC reads the trace's current metadata, merges new keys into
+// the `cc` block (preserving identity already written at trace creation and
+// any non-cc metadata Opik may have added), and PATCHes the trace.
+func mergeMetadataCC(traceID string, addCC map[string]interface{}) {
+	var trace struct {
+		Metadata map[string]interface{} `json:"metadata"`
+	}
+	if err := api.Get("/traces/"+traceID, &trace); err != nil {
+		debugLog("mergeMetadataCC get: %v", err)
+		// Best-effort: still PATCH our keys under cc with no merge.
+		trace.Metadata = map[string]interface{}{}
+	}
+	if trace.Metadata == nil {
+		trace.Metadata = map[string]interface{}{}
+	}
+	existingCC, _ := trace.Metadata["cc"].(map[string]interface{})
+	if existingCC == nil {
+		existingCC = map[string]interface{}{}
+	}
+	for k, v := range addCC {
+		existingCC[k] = v
+	}
+	trace.Metadata["cc"] = existingCC
+	if err := api.Patch("/traces/"+traceID, map[string]interface{}{
+		"project_name": config.Project,
+		"metadata":     trace.Metadata,
+	}); err != nil {
+		debugLog("mergeMetadataCC patch: %v", err)
+	}
 }
 
 func shortSHA(sha string) string {

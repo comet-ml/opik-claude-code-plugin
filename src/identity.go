@@ -7,7 +7,8 @@ import (
 )
 
 // ClaudeIdentity is Claude Code's OAuth identity, read from ~/.claude.json.
-// Used as the source of truth for who is running this session.
+// Used as the source of truth for who is running this session — preferred
+// over git config because it gives a stable user UUID + org primitive.
 type ClaudeIdentity struct {
 	UserUUID    string `json:"user_uuid,omitempty"`
 	Email       string `json:"email,omitempty"`
