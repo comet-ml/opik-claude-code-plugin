@@ -33,6 +33,33 @@ func (a *API) Put(endpoint string, data interface{}) error {
 	return a.request("PUT", endpoint, data)
 }
 
+// Get fetches a JSON endpoint and unmarshals the response into out.
+func (a *API) Get(endpoint string, out interface{}) error {
+	req, err := http.NewRequest("GET", a.config.URL+endpoint, nil)
+	if err != nil {
+		return fmt.Errorf("GET %s: build request: %w", endpoint, err)
+	}
+	if a.config.APIKey != "" {
+		req.Header.Set("Authorization", a.config.APIKey)
+	}
+	if a.config.Workspace != "" {
+		req.Header.Set("Comet-Workspace", a.config.Workspace)
+	}
+	resp, err := a.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("GET %s: %w", endpoint, err)
+	}
+	defer func() {
+		io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+	}()
+	if resp.StatusCode >= 400 {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("GET %s: %d %s", endpoint, resp.StatusCode, body)
+	}
+	return json.NewDecoder(resp.Body).Decode(out)
+}
+
 func (a *API) request(method, endpoint string, data interface{}) error {
 	jsonData, err := json.Marshal(data)
 	if err != nil {
