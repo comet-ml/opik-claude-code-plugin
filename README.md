@@ -86,6 +86,21 @@ project_name = claude-code        # used by the Claude Code plugin
 > environment variables (`OPIK_CC_WORKSPACE`, `OPIK_CC_PROJECT`) always take precedence over
 > the file.
 
+You can also override `url_override` and `api_key` in `[opik_cc]` to point Claude Code traces
+at a **different Opik instance** than the SDK:
+
+```ini
+[opik_cc]
+url_override = https://my-other-opik/api/   # different Opik instance for the plugin
+api_key = other-instance-api-key            # must match that instance
+workspace = comet-all
+project_name = claude-code
+```
+
+> Set `url_override` and `api_key` together — a URL pointing at one instance with the other
+> instance's key will fail auth. `OPIK_BASE_URL` (env) is the simpler way to point only the
+> plugin at a different URL, and always wins over the file.
+
 ### External Trace Linking
 
 Link Claude Code sessions to existing Opik traces (useful for embedding Claude Code in larger workflows):
