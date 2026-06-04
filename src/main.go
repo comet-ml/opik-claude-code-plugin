@@ -524,7 +524,11 @@ func flush(state *State) {
 		return
 	}
 
-	spans := processTranscriptEntries(state.TraceID, entries, "")
+	// Build the per-domain snapshots once from the full transcript and the
+	// turn slice, then attach them to every per-message span as
+	// `cc.<domain>.*`.
+	snapshots := buildDomainSnapshots(state.Transcript, entries)
+	spans := processTranscriptEntries(state.TraceID, entries, "", snapshots)
 	if len(spans) == 0 {
 		return
 	}
@@ -549,14 +553,17 @@ func processTranscript(traceID, path string, startLine int, parentSpanID string)
 	if err != nil || len(entries) == 0 {
 		return nil
 	}
-	return processTranscriptEntries(traceID, entries, parentSpanID)
+	// Subagent path: the agent's transcript is self-contained, so the
+	// snapshot is just its entries — pass nil as the full transcript.
+	return processTranscriptEntries(traceID, entries, parentSpanID, domainSnapshotsFromEntries(entries, entries))
 }
 
-func processTranscriptEntries(traceID string, entries []TranscriptEntry, parentSpanID string) []Span {
+func processTranscriptEntries(traceID string, entries []TranscriptEntry, parentSpanID string, snapshots map[string]map[string]interface{}) []Span {
 	toolResults := BuildToolResults(entries)
 	taskResults := BuildTaskResults(entries)
 	parsed := ParseAssistantMessages(entries)
 	DeduplicateUsage(parsed)
+	skillBodyForToolUse = buildSkillBodyMap(entries)
 
 	effectiveParentSpanID := parentSpanID
 	if effectiveParentSpanID == "" && config.RootSpanID != "" {
@@ -607,6 +614,9 @@ func processTranscriptEntries(traceID string, entries []TranscriptEntry, parentS
 			continue
 		}
 
+		applyDomainSnapshots(&span, snapshots)
+		applyLLMCallMetadata(&span, p)
+
 		if p.Usage != nil && span.Usage == nil {
 			span.Usage = map[string]int{
 				"prompt_tokens":     p.Usage.InputTokens,
@@ -627,6 +637,90 @@ func processTranscriptEntries(traceID string, entries []TranscriptEntry, parentS
 	}
 
 	return spans
+}
+
+// applyDomainSnapshots writes each `domain → snap` pair into
+// `span.metadata.cc.<domain>.*`. Keys inside each domain are merged in,
+// preserving anything already set on that domain (e.g. `cc.skills.load`
+// written by enrichSkillSpan before this runs).
+func applyDomainSnapshots(span *Span, snapshots map[string]map[string]interface{}) {
+	if len(snapshots) == 0 {
+		return
+	}
+	cc := ensureCCMap(span)
+	for domain, snap := range snapshots {
+		if snap == nil {
+			continue
+		}
+		dom, ok := cc[domain].(map[string]interface{})
+		if !ok {
+			dom = map[string]interface{}{}
+			cc[domain] = dom
+		}
+		for k, v := range snap {
+			dom[k] = v
+		}
+	}
+}
+
+// buildDomainSnapshots reads the full transcript + applies the turn slice
+// already in hand. Returns the per-domain snapshots that get attached to
+// every span and the trace.
+func buildDomainSnapshots(transcriptPath string, turnEntries []TranscriptEntry) map[string]map[string]interface{} {
+	fullEntries, err := ReadTranscript(transcriptPath, 0)
+	if err != nil {
+		debugLog("buildDomainSnapshots: %v", err)
+		fullEntries = turnEntries
+	}
+	return domainSnapshotsFromEntries(fullEntries, turnEntries)
+}
+
+func domainSnapshotsFromEntries(fullEntries, turnEntries []TranscriptEntry) map[string]map[string]interface{} {
+	return map[string]map[string]interface{}{
+		"skills":           BuildSkillsSnapshot(fullEntries),
+		"tools":            extractToolsSnapshot(fullEntries),
+		"memory":           extractMemorySnapshot(),
+		"thinking":         extractThinkingSnapshot(turnEntries),
+		"tool_results":     extractToolResultsSnapshot(turnEntries),
+		"user_prompts":     extractUserPromptsSnapshot(turnEntries),
+		"file_attachments": extractFileAttachmentsSnapshot(turnEntries),
+		"prior_assistant":  extractPriorAssistantSnapshot(fullEntries, turnEntries),
+		"assistant_text":   extractAssistantTextSnapshot(turnEntries),
+	}
+}
+
+// applyLLMCallMetadata tags every per-message span with its origin in the
+// transcript. Critical for analysis: Claude Code splits a single LLM call
+// into multiple transcript entries (one per content block), all sharing
+// the same `message.id` and `message.usage`. DeduplicateUsage attaches the
+// total usage to only the first block, so naive `GROUP BY span.name` over
+// `usage` looks like all tokens came from Thinking. Consumers should
+// `GROUP BY cc.llm_call.message_id` to reconstruct the true per-call
+// totals.
+func applyLLMCallMetadata(span *Span, p ParsedEntry) {
+	if p.MessageID == "" {
+		return
+	}
+	cc := ensureCCMap(span)
+	cc["llm_call"] = map[string]interface{}{
+		"message_id":               p.MessageID,
+		"block_index":              p.BlockIndex,
+		"block_kind":               p.ContentType, // "thinking" | "text" | "tool_use"
+		"measured_output_tokens":   p.MeasuredOutputTokens,
+		"attributed_output_tokens": p.AttributedOutputTokens,
+	}
+}
+
+func ensureCCMap(span *Span) map[string]interface{} {
+	if span.Metadata == nil {
+		span.Metadata = map[string]interface{}{}
+	}
+	cc, ok := span.Metadata["cc"].(map[string]interface{})
+	if !ok {
+		cc = map[string]interface{}{}
+		span.Metadata["cc"] = cc
+	}
+	return cc
 }
 
 func processToolUse(span *Span, p ParsedEntry, toolResults map[string]*ToolResultInfo, taskResults map[string]*ToolUseResult) {
@@ -701,7 +795,48 @@ func processToolUse(span *Span, p ParsedEntry, toolResults map[string]*ToolResul
 			span.Output = map[string]interface{}{}
 		}
 	}
+
+	if span.Name == "Skill" {
+		enrichSkillSpan(span, p, toolResults)
+	}
 }
+
+// enrichSkillSpan stamps a `Skill` tool_use span with the load event under
+// `cc.skills.load`. Same identity shape as a `cc.skills.loaded[]` row, so
+// querying for "every span that loaded opik-backend" is one filter on
+// `cc.skills.load.name`.
+func enrichSkillSpan(span *Span, p ParsedEntry, toolResults map[string]*ToolResultInfo) {
+	skillName := skillInputName(p.Content.Input)
+	body := skillBodyForToolUse[p.Content.ID]
+	path, _ := resolveSkillBody(skillName)
+	source := "bundled"
+	if path != "" {
+		source = "listing"
+	}
+	load := map[string]interface{}{
+		"name":        skillName,
+		"source":      source,
+		"sha256":      sha256hex(body),
+		"body_tokens": tokEstimate(body),
+		"tool_use_id": p.Content.ID,
+	}
+	if path != "" {
+		load["path"] = path
+	}
+
+	cc := ensureCCMap(span)
+	skills, ok := cc["skills"].(map[string]interface{})
+	if !ok {
+		skills = map[string]interface{}{}
+		cc["skills"] = skills
+	}
+	skills["load"] = load
+}
+
+// skillBodyForToolUse is set per-invocation by processTranscriptEntries
+// before walking spans, so enrichSkillSpan can read the body without
+// rebuilding the map for each Skill tool_use.
+var skillBodyForToolUse map[string]string
 
 func compactInput(customInstructions string) string {
 	if customInstructions != "" {

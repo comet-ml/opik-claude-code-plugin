@@ -219,11 +219,20 @@ func postTraceMetrics(state *State) {
 		metrics["head_sha_end"] = shortSHA(headEnd)
 	}
 
+	fullEntries, _ := ReadTranscript(state.Transcript, 0)
+	turnEntries, _ := ReadTranscript(state.Transcript, state.StartLine)
+	for domain, snap := range domainSnapshotsFromEntries(fullEntries, turnEntries) {
+		if snap != nil {
+			metrics[domain] = snap
+		}
+	}
+
 	mergeMetadataCC(state.TraceID, metrics)
 
 	debugLog("metrics %s  repo=%s  branch=%s  commits=%d  +-=%d  uncommitted=%d  files=%d  authored=%d  overwritten=%d",
 		state.TraceID[:8], repo, branch, commits, insC+delC, insU+delU, len(agg.Files), agg.LinesAuthored, agg.LinesOverwritten)
 }
+
 
 // mergeMetadataCC reads the trace's current metadata, merges new keys into
 // the `cc` block (preserving identity already written at trace creation and
