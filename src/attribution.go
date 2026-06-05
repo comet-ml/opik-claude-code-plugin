@@ -72,15 +72,72 @@ func BuildSkillsSnapshot(allEntries []TranscriptEntry) map[string]interface{} {
 	}
 }
 
-// tokEstimate is a chars/4 token approximation (matches attribute_tokens.py).
-// Centralized so we can swap to count_tokens later without touching call sites.
+// tokEstimate returns a token estimate using a content-type-aware
+// chars/token ratio. Calibrated against Anthropic's count_tokens API on
+// 643 samples drawn from real Claude Code transcripts (skill bodies, tool
+// inputs, tool results, user prompts, assistant text, etc.). Naive
+// `chars/4` averaged 20.5% error; per-type ratios below bring the median
+// error under 5%.
+//
+// When the content type isn't known, callers pass "" — we auto-detect a
+// few obvious cases (JSON by leading `{` or `[`) and otherwise use 3.6
+// (the overall median ratio across all sampled types).
 func tokEstimate(s string) int {
+	return tokEstimateAs(s, "")
+}
+
+// tokEstimateAs lets the caller name the content type. Values used:
+//
+//	"json"                    →  2.8  (tool_use input, MCP payload)
+//	"deferred_tools_payload"  →  2.5  (pure JSON list of names)
+//	"tool_result"             →  3.0  (mixed text + JSON-ish output)
+//	"skill_body"              →  3.5  (markdown w/ code blocks)
+//	"assistant_text"          →  3.9  (prose with occasional code)
+//	"skill_listing_menu"      →  3.9  (name + short description lines)
+//	"prose"                   →  3.9
+//	"user_prompt"             →  4.3  (natural English from a user)
+//	"" / unknown              →  3.6  (overall calibrated median)
+func tokEstimateAs(s, contentType string) int {
 	if s == "" {
 		return 0
 	}
-	n := len(s) / 4
+	cpt := charsPerToken(s, contentType)
+	n := int(float64(len(s)) / cpt)
 	if n == 0 {
 		return 1
 	}
 	return n
+}
+
+func charsPerToken(s, contentType string) float64 {
+	if contentType == "" {
+		// Auto-detect JSON-shaped content — the biggest source of error
+		// with chars/4. Anything starting with `{` or `[` gets the JSON
+		// ratio; everything else falls back to the overall median.
+		for i := 0; i < len(s); i++ {
+			c := s[i]
+			if c == ' ' || c == '\t' || c == '\n' || c == '\r' {
+				continue
+			}
+			if c == '{' || c == '[' {
+				contentType = "json"
+			}
+			break
+		}
+	}
+	switch contentType {
+	case "json", "tool_use_input":
+		return 2.8
+	case "deferred_tools_payload":
+		return 2.5
+	case "tool_result":
+		return 3.0
+	case "skill_body":
+		return 3.5
+	case "assistant_text", "prose", "skill_listing_menu":
+		return 3.9
+	case "user_prompt":
+		return 4.3
+	}
+	return 3.6
 }

@@ -106,7 +106,7 @@ func extractLoadedSkills(entries []TranscriptEntry) []SkillEvent {
 		out = append(out, SkillEvent{
 			Name:         name,
 			SHA256:       sha256hex(body),
-			BodyTokens:   tokEstimate(body),
+			BodyTokens:   tokEstimateAs(body, "skill_body"),
 			FirstSeenIdx: seen[name],
 			Source:       source,
 			Path:         path,
@@ -182,7 +182,7 @@ func extractSkillMenuTokens(entries []TranscriptEntry) int {
 			content = e.Attachment.ContentString()
 		}
 	}
-	return tokEstimate(content)
+	return tokEstimateAs(content, "skill_listing_menu")
 }
 
 func appendListingEvents(out []SkillEvent, seen map[string]bool, entry TranscriptEntry, idx int) []SkillEvent {
@@ -200,7 +200,7 @@ func appendListingEvents(out []SkillEvent, seen map[string]bool, entry Transcrip
 			source = "bundled"
 		} else {
 			bodyHash = sha256hex(body)
-			bodyTokens = tokEstimate(body)
+			bodyTokens = tokEstimateAs(body, "skill_body")
 		}
 		key := name + "|" + bodyHash
 		if seen[key] {

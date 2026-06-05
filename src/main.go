@@ -724,9 +724,27 @@ func ensureCCMap(span *Span) map[string]interface{} {
 }
 
 func processToolUse(span *Span, p ParsedEntry, toolResults map[string]*ToolResultInfo, taskResults map[string]*ToolUseResult) {
-	span.Name = p.Content.Name
+	rawName := p.Content.Name
+	span.Name = rawName
 	if span.Name == "" {
 		span.Name = "Tool"
+	}
+	// MCP tools come over the wire as `mcp__<server>__<tool>`. Display the
+	// bare tool name; surface server + full name as metadata so analytics
+	// can group by server and filtering by the full canonical name still
+	// works.
+	if strings.HasPrefix(rawName, "mcp__") {
+		parts := strings.SplitN(rawName, "__", 3)
+		if len(parts) == 3 {
+			cc := ensureCCMap(span)
+			cc["tool"] = map[string]interface{}{
+				"name":   parts[2],
+				"server": parts[1],
+				"source": "mcp",
+				"full":   rawName,
+			}
+			span.Name = parts[2]
+		}
 	}
 	span.Type = "tool"
 	span.Input = p.Content.Input
@@ -817,7 +835,7 @@ func enrichSkillSpan(span *Span, p ParsedEntry, toolResults map[string]*ToolResu
 		"name":        skillName,
 		"source":      source,
 		"sha256":      sha256hex(body),
-		"body_tokens": tokEstimate(body),
+		"body_tokens": tokEstimateAs(body, "skill_body"),
 		"tool_use_id": p.Content.ID,
 	}
 	if path != "" {

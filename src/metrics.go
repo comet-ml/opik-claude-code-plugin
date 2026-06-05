@@ -197,7 +197,7 @@ func postTraceMetrics(state *State) {
 	commits, insC, delC := commitsBetween(cwd, state.HeadSHAStart, headEnd)
 	filesU, insU, delU := parseShortstat(git(cwd, "diff", "HEAD", "--shortstat"))
 
-	metrics := map[string]interface{}{
+	gitMetrics := map[string]interface{}{
 		"commits_in_trace":  commits,
 		"lines_committed":   insC + delC,
 		"uncommitted_lines": insU + delU,
@@ -207,16 +207,20 @@ func postTraceMetrics(state *State) {
 		"lines_overwritten": agg.LinesOverwritten,
 	}
 	if repo != "" {
-		metrics["repository"] = repo
+		gitMetrics["repository"] = repo
 	}
 	if branch != "" {
-		metrics["branch"] = branch
+		gitMetrics["branch"] = branch
 	}
 	if state.HeadSHAStart != "" {
-		metrics["head_sha_start"] = shortSHA(state.HeadSHAStart)
+		gitMetrics["head_sha_start"] = shortSHA(state.HeadSHAStart)
 	}
 	if headEnd != "" {
-		metrics["head_sha_end"] = shortSHA(headEnd)
+		gitMetrics["head_sha_end"] = shortSHA(headEnd)
+	}
+
+	metrics := map[string]interface{}{
+		"git": gitMetrics,
 	}
 
 	fullEntries, _ := ReadTranscript(state.Transcript, 0)

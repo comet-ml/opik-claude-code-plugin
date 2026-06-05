@@ -49,7 +49,7 @@ func extractMemorySnapshot() map[string]interface{} {
 			continue
 		}
 		s := string(body)
-		tokens := tokEstimate(s)
+		tokens := tokEstimateAs(s, "prose") // memory files are markdown prose
 		files = append(files, map[string]interface{}{
 			"path":        p,
 			"sha256":      sha256hex(s),
@@ -69,51 +69,34 @@ func extractMemorySnapshot() map[string]interface{} {
 	}
 }
 
-// extractThinkingSnapshot aggregates thinking-block tokens per model.
-// Thinking content is server-redacted, so we infer tokens as
-// `output_tokens - measured(text + tool_use)` per assistant message.
+// extractThinkingSnapshot aggregates thinking-block tokens per model,
+// driven off the SAME per-block attribution that lands on each span's
+// cc.llm_call.attributed_output_tokens. This guarantees that
+// Σ attributed[thinking] over the trace == cc.thinking.summary.total_tokens.
 // `cc.thinking.{summary, by_model}`.
 func extractThinkingSnapshot(entries []TranscriptEntry) map[string]interface{} {
+	parsed := ParseAssistantMessages(entries)
+	DeduplicateUsage(parsed)
+
 	type group struct {
 		tokens, blockCount int
 	}
 	byModel := map[string]*group{}
 	totalTokens, totalBlocks := 0, 0
 
-	for _, e := range entries {
-		if e.Type != "assistant" || e.Message == nil || e.Message.Usage == nil {
+	for _, p := range parsed {
+		if p.ContentType != "thinking" {
 			continue
 		}
-		measuredOutput := 0
-		thinkingBlocks := 0
-		for _, c := range e.Message.Content {
-			switch c.Type {
-			case "text":
-				measuredOutput += tokEstimate(c.Text)
-			case "tool_use":
-				raw, _ := json.Marshal(c.Input)
-				measuredOutput += tokEstimate(string(raw))
-			case "thinking":
-				thinkingBlocks++
-			}
-		}
-		if thinkingBlocks == 0 {
-			continue
-		}
-		thinkingTokens := e.Message.Usage.OutputTokens - measuredOutput
-		if thinkingTokens < 0 {
-			thinkingTokens = 0
-		}
-		model := e.Message.Model
-		g, ok := byModel[model]
+		g, ok := byModel[p.Model]
 		if !ok {
 			g = &group{}
-			byModel[model] = g
+			byModel[p.Model] = g
 		}
-		g.tokens += thinkingTokens
-		g.blockCount += thinkingBlocks
-		totalTokens += thinkingTokens
-		totalBlocks += thinkingBlocks
+		g.tokens += p.AttributedOutputTokens
+		g.blockCount++
+		totalTokens += p.AttributedOutputTokens
+		totalBlocks++
 	}
 	if totalBlocks == 0 {
 		return nil
@@ -141,6 +124,12 @@ func extractThinkingSnapshot(entries []TranscriptEntry) map[string]interface{} {
 
 // extractToolResultsSnapshot aggregates tool_result bytes grouped by the
 // tool that produced them. `cc.tool_results.{summary, by_tool}`.
+//
+// Two result-delivery shapes need special handling:
+//   - Normal tool_result: user message content block with type="tool_result".
+//   - ToolSearch: result is delivered as a `deferred_tools_delta` attachment
+//     (addedLines + addedNames). We attribute that delta's addedLines size
+//     to the ToolSearch tool_use that immediately preceded it.
 func extractToolResultsSnapshot(entries []TranscriptEntry) map[string]interface{} {
 	toolNames := map[string]string{}
 	for _, e := range entries {
@@ -160,28 +149,77 @@ func extractToolResultsSnapshot(entries []TranscriptEntry) map[string]interface{
 	byTool := map[string]*group{}
 	totalTokens, totalCount := 0, 0
 
+	// Walk entries in order so we can pair a ToolSearch tool_use with the
+	// next deferred_tools_delta attachment that follows it.
+	var pendingToolSearchID string
+	resultedIDs := map[string]bool{}
 	for _, e := range entries {
-		if e.Type != "user" || e.Message == nil {
-			continue
-		}
-		for _, c := range e.Message.Content {
-			if c.Type != "tool_result" {
+		switch e.Type {
+		case "assistant":
+			if e.Message == nil {
 				continue
 			}
-			name, ok := toolNames[c.ToolUseID]
-			if !ok || name == "" {
-				name = "unknown"
+			for _, c := range e.Message.Content {
+				if c.Type == "tool_use" && c.Name == "ToolSearch" {
+					pendingToolSearchID = c.ID
+				}
 			}
-			tokens := resultTokens(c.Content)
-			g, exists := byTool[name]
+		case "user":
+			if e.Message == nil {
+				continue
+			}
+			for _, c := range e.Message.Content {
+				if c.Type != "tool_result" {
+					continue
+				}
+				name := toolNames[c.ToolUseID]
+				if name == "" {
+					name = "unknown"
+				}
+				tokens := resultTokens(c.Content)
+				g, exists := byTool[name]
+				if !exists {
+					g = &group{}
+					byTool[name] = g
+				}
+				g.tokens += tokens
+				g.count++
+				totalTokens += tokens
+				totalCount++
+				resultedIDs[c.ToolUseID] = true
+				if c.ToolUseID == pendingToolSearchID {
+					pendingToolSearchID = ""
+				}
+			}
+		case "attachment":
+			if e.Attachment == nil || e.Attachment.Type != "deferred_tools_delta" {
+				continue
+			}
+			if pendingToolSearchID == "" {
+				continue
+			}
+			// Synthesize a ToolSearch tool_result from the delta's added
+			// lines (or names) — that's exactly the payload the model sees.
+			payload := strings.Join(e.Attachment.AddedLines, "\n")
+			if payload == "" {
+				payload = strings.Join(e.Attachment.AddedNames, "\n")
+			}
+			if payload == "" {
+				pendingToolSearchID = ""
+				continue
+			}
+			tokens := tokEstimateAs(payload, "deferred_tools_payload")
+			g, exists := byTool["ToolSearch"]
 			if !exists {
 				g = &group{}
-				byTool[name] = g
+				byTool["ToolSearch"] = g
 			}
 			g.tokens += tokens
 			g.count++
 			totalTokens += tokens
 			totalCount++
+			resultedIDs[pendingToolSearchID] = true
+			pendingToolSearchID = ""
 		}
 	}
 	if totalCount == 0 {
@@ -215,40 +253,49 @@ func extractToolResultsSnapshot(entries []TranscriptEntry) map[string]interface{
 func resultTokens(content interface{}) int {
 	switch v := content.(type) {
 	case string:
-		return tokEstimate(v)
+		return tokEstimateAs(v, "tool_result")
 	case []interface{}:
 		total := 0
 		for _, item := range v {
 			if m, ok := item.(map[string]interface{}); ok {
 				if t, ok := m["text"].(string); ok {
-					total += tokEstimate(t)
+					total += tokEstimateAs(t, "tool_result")
 					continue
 				}
 			}
 			raw, _ := json.Marshal(item)
-			total += tokEstimate(string(raw))
+			total += tokEstimateAs(string(raw), "tool_result")
 		}
 		return total
 	default:
 		raw, _ := json.Marshal(v)
-		return tokEstimate(string(raw))
+		return tokEstimateAs(string(raw), "tool_result")
 	}
 }
 
 // extractUserPromptsSnapshot returns the per-turn user-text contribution.
-// Tool results don't count here (they're under cc.tool_results).
+// Tool results don't count here (they're under cc.tool_results); skill
+// bodies don't count either (they're under cc.skills.loaded). Without
+// excluding skill bodies, a `Skill` tool_use would inflate user_prompts
+// by the entire skill body — 100K+ tokens for claude-api.
 // `cc.user_prompts.summary`.
 func extractUserPromptsSnapshot(entries []TranscriptEntry) map[string]interface{} {
+	skillBodyTexts := skillBodyTextSet(entries)
+
 	totalTokens, count := 0, 0
 	for _, e := range entries {
 		if e.Type != "user" || e.Message == nil {
 			continue
 		}
 		for _, c := range e.Message.Content {
-			if c.Type == "text" {
-				totalTokens += tokEstimate(c.Text)
-				count++
+			if c.Type != "text" {
+				continue
 			}
+			if skillBodyTexts[c.Text] {
+				continue
+			}
+			totalTokens += tokEstimateAs(c.Text, "user_prompt")
+			count++
 		}
 	}
 	if count == 0 {
@@ -261,6 +308,20 @@ func extractUserPromptsSnapshot(entries []TranscriptEntry) map[string]interface{
 			"bucket":       promptBucket(totalTokens),
 		},
 	}
+}
+
+// skillBodyTextSet returns the set of user-text strings that are skill
+// bodies (the N+2 text after a Skill tool_use → tool_result pair).
+// Callers use this to avoid counting skill bodies as user prompts.
+func skillBodyTextSet(entries []TranscriptEntry) map[string]bool {
+	bodies := buildSkillBodyMap(entries)
+	out := make(map[string]bool, len(bodies))
+	for _, body := range bodies {
+		if body != "" {
+			out[body] = true
+		}
+	}
+	return out
 }
 
 func promptBucket(tokens int) string {
@@ -302,6 +363,7 @@ func extractFileAttachmentsSnapshot(entries []TranscriptEntry) map[string]interf
 			continue
 		}
 		body := wrapper.File.Content
+		// Auto-detect — file attachments vary (source code, markdown, JSON, …).
 		tokens := tokEstimate(body)
 		files = append(files, map[string]interface{}{
 			"path":         wrapper.File.Path,
@@ -369,7 +431,7 @@ func extractAssistantTextSnapshot(entries []TranscriptEntry) map[string]interfac
 		}
 		for _, c := range e.Message.Content {
 			if c.Type == "text" {
-				total += tokEstimate(c.Text)
+				total += tokEstimateAs(c.Text, "assistant_text")
 				count++
 			}
 		}
