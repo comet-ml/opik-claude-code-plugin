@@ -67,6 +67,9 @@ func extractToolsSnapshot(entries []TranscriptEntry) map[string]interface{} {
 	builtinLines, mcpLines := "", ""        // sources → joined lines
 
 	for name, line := range available {
+		// SplitN("__", 3) — assumes server names contain no `__`. Tool
+		// names CAN (absorbed into the 3rd part). Same assumption as
+		// processToolUse in main.go; keep them aligned.
 		if strings.HasPrefix(name, "mcp__") {
 			parts := strings.SplitN(name, "__", 3)
 			if len(parts) < 3 {

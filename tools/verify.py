@@ -46,17 +46,19 @@ def main():
     print(f"  input:  {(latest.get('input') or {}).get('text','')[:60]!r}")
     print(f"  spans:  {latest.get('span_count')}")
 
-    # All spans
+    # All spans — paginate until empty (no cap).
     spans = []
-    for p in range(1, 10):
+    page = 1
+    while True:
         d = fetch(
-            f"https://www.comet.com/opik/api/v1/private/spans?project_name=claude-code&trace_id={tid}&size=200&page={p}",
+            f"https://www.comet.com/opik/api/v1/private/spans?project_name=claude-code&trace_id={tid}&size=200&page={page}",
             H,
         )
         rows = d.get("content", [])
         spans.extend(rows)
         if len(rows) < 200:
             break
+        page += 1
 
     if not spans:
         print("FAIL: no spans on trace", file=sys.stderr)
@@ -64,33 +66,44 @@ def main():
 
     failures = []
 
-    # B1 — required domains present. Session-scoped ones must always be there;
-    # turn-scoped ones (thinking/tool_results/user_prompts/file_attachments/
-    # assistant_text) are correctly nil when this turn has no such content yet.
-    sample = next((s for s in spans if s.get("name") == "Bash"), spans[0])
-    cc = sample.get("metadata", {}).get("cc", {})
-    session_required = {"skills", "tools", "memory", "llm_call"}
+    # B1 — required domains present on the trace metadata. Domain snapshots
+    # are written at the trace level (postTraceMetrics); spans only carry
+    # cc.llm_call + per-event hooks (cc.skills.load, cc.tool).
+    trace_cc = (latest.get("metadata") or {}).get("cc", {})
+    session_required = {"skills", "tools", "memory", "git", "identity"}
     turn_optional = {
         "thinking", "tool_results", "user_prompts",
         "file_attachments", "prior_assistant", "assistant_text",
     }
-    missing = session_required - set(cc.keys())
+    missing = session_required - set(trace_cc.keys())
     if missing:
-        failures.append(f"B1 ✗ session-scoped domains missing on {sample.get('name')}: {missing}")
+        failures.append(f"B1 ✗ session-scoped domains missing on trace: {missing}")
     else:
-        present_optional = turn_optional & set(cc.keys())
-        print(f"  B1 ✓ all {len(session_required)} session domains present "
-              f"+ {len(present_optional)}/{len(turn_optional)} turn-scoped on {sample.get('name')}")
+        present_optional = turn_optional & set(trace_cc.keys())
+        print(f"  B1 ✓ all {len(session_required)} session domains on trace "
+              f"+ {len(present_optional)}/{len(turn_optional)} turn-scoped")
 
-    # H1/H2 — legacy gone
-    if "context" in cc:
-        failures.append("H1 ✗ legacy cc.context still present")
-    if "attribution" in cc:
-        failures.append("H2 ✗ legacy cc.attribution still present")
-    if "context" not in cc and "attribution" not in cc:
-        print("  H1/H2 ✓ no legacy keys")
+    # H1/H2 — legacy keys gone (check both trace cc and a sample span cc)
+    sample = next((s for s in spans if s.get("name") == "Bash"), spans[0])
+    span_cc = sample.get("metadata", {}).get("cc", {})
+    legacy_top_level = {
+        "branch", "commits_in_trace", "files_authored", "head_sha_start",
+        "head_sha_end", "lines_authored", "lines_committed", "lines_overwritten",
+        "repository", "uncommitted_files", "uncommitted_lines",
+        "org_name", "org_uuid", "user_display_name", "user_email", "user_uuid",
+        "context", "attribution",
+    }
+    leaks = legacy_top_level & set(trace_cc.keys())
+    if leaks:
+        failures.append(f"H1 ✗ legacy top-level keys still on trace cc: {leaks}")
+    else:
+        print("  H1 ✓ no legacy top-level keys on trace.cc")
+    if "context" in span_cc or "attribution" in span_cc:
+        failures.append("H2 ✗ legacy cc.context or cc.attribution still on spans")
+    else:
+        print("  H2 ✓ no legacy span cc keys")
 
-    # H3 — no timestamps anywhere under cc
+    # H3 — no timestamps anywhere under cc (check trace + span)
     found_ts = []
 
     def find_ts(o, path=""):
@@ -104,7 +117,8 @@ def main():
             for i, v in enumerate(o):
                 find_ts(v, f"{path}[{i}]")
 
-    find_ts(cc, "cc")
+    find_ts(trace_cc, "trace.cc")
+    find_ts(span_cc, "span.cc")
     if found_ts:
         failures.append(f"H3 ✗ timestamp-shaped fields under cc.*: {found_ts[:5]}")
     else:
@@ -153,10 +167,9 @@ def main():
         if "thinking" in by_kind and by_kind["thinking"] / total > 0.95:
             failures.append(f"D4 ⚠ thinking={by_kind['thinking']/total*100:.0f}% — looks like pre-rewrite over-attribution")
 
-    # C7 — built-in + MCP == total available
-    if "tools" in cc:
-        t = cc["tools"]
-        sm = t.get("summary", {})
+    # C7 — built-in + MCP == total available (from trace metadata)
+    if "tools" in trace_cc:
+        sm = trace_cc["tools"].get("summary", {})
         bs = sm.get("by_source", {})
         b = bs.get("builtin", {}).get("available_count", 0)
         m = bs.get("mcp", {}).get("available_count", 0)

@@ -74,9 +74,15 @@ func extractMemorySnapshot() map[string]interface{} {
 // cc.llm_call.attributed_output_tokens. This guarantees that
 // Σ attributed[thinking] over the trace == cc.thinking.summary.total_tokens.
 // `cc.thinking.{summary, by_model}`.
-func extractThinkingSnapshot(entries []TranscriptEntry) map[string]interface{} {
-	parsed := ParseAssistantMessages(entries)
-	DeduplicateUsage(parsed)
+//
+// `parsed` should be the dedup-applied output of ParseAssistantMessages +
+// DeduplicateUsage on the turn's entries. Pass nil to reparse (for
+// callers that don't already have a cached slice).
+func extractThinkingSnapshot(entries []TranscriptEntry, parsed []ParsedEntry) map[string]interface{} {
+	if parsed == nil {
+		parsed = ParseAssistantMessages(entries)
+		DeduplicateUsage(parsed)
+	}
 
 	type group struct {
 		tokens, blockCount int
@@ -149,23 +155,45 @@ func extractToolResultsSnapshot(entries []TranscriptEntry) map[string]interface{
 	byTool := map[string]*group{}
 	totalTokens, totalCount := 0, 0
 
-	// Walk entries in order so we can pair a ToolSearch tool_use with the
-	// next deferred_tools_delta attachment that follows it.
-	var pendingToolSearchID string
+	// Walk entries in order. Pair ToolSearch tool_uses with the
+	// `deferred_tools_delta` that immediately follows them (no intervening
+	// non-delta event). Two protections against mis-attribution:
+	//
+	//   1. Pending IDs are a FIFO queue so back-to-back ToolSearches each
+	//      get their own delta — neither is silently overwritten.
+	//   2. Any event between the ToolSearch and the delta — a regular
+	//      tool_result, a non-delta attachment, an assistant message —
+	//      drains the queue, so an unrelated delta (e.g. one triggered by
+	//      an MCP toggle) can't be mis-attributed to a stale ToolSearch.
+	var pendingToolSearches []string // tool_use IDs awaiting a delta
 	resultedIDs := map[string]bool{}
 	for _, e := range entries {
 		switch e.Type {
 		case "assistant":
 			if e.Message == nil {
+				// Empty assistant entry — drain pending queue (no
+				// immediate delta means the ToolSearch's result must have
+				// already arrived as a normal tool_result, handled below).
+				pendingToolSearches = pendingToolSearches[:0]
 				continue
 			}
+			drainedThisEntry := false
 			for _, c := range e.Message.Content {
 				if c.Type == "tool_use" && c.Name == "ToolSearch" {
-					pendingToolSearchID = c.ID
+					if !drainedThisEntry {
+						pendingToolSearches = pendingToolSearches[:0]
+						drainedThisEntry = true
+					}
+					pendingToolSearches = append(pendingToolSearches, c.ID)
+				} else if c.Type == "tool_use" {
+					// Some other tool_use sits between ToolSearch and a
+					// future delta — drain.
+					pendingToolSearches = pendingToolSearches[:0]
 				}
 			}
 		case "user":
 			if e.Message == nil {
+				pendingToolSearches = pendingToolSearches[:0]
 				continue
 			}
 			for _, c := range e.Message.Content {
@@ -187,25 +215,32 @@ func extractToolResultsSnapshot(entries []TranscriptEntry) map[string]interface{
 				totalTokens += tokens
 				totalCount++
 				resultedIDs[c.ToolUseID] = true
-				if c.ToolUseID == pendingToolSearchID {
-					pendingToolSearchID = ""
-				}
 			}
+			// Any user message (with tool_result OR otherwise) breaks the
+			// ToolSearch→delta adjacency, so drain.
+			pendingToolSearches = pendingToolSearches[:0]
 		case "attachment":
-			if e.Attachment == nil || e.Attachment.Type != "deferred_tools_delta" {
+			if e.Attachment == nil {
 				continue
 			}
-			if pendingToolSearchID == "" {
+			if e.Attachment.Type != "deferred_tools_delta" {
+				// Non-delta attachment between ToolSearch and a delta —
+				// breaks adjacency.
+				pendingToolSearches = pendingToolSearches[:0]
 				continue
 			}
-			// Synthesize a ToolSearch tool_result from the delta's added
-			// lines (or names) — that's exactly the payload the model sees.
+			if len(pendingToolSearches) == 0 {
+				continue
+			}
+			// Synthesize a ToolSearch tool_result from the delta payload —
+			// the addedLines text is exactly what the model sees.
 			payload := strings.Join(e.Attachment.AddedLines, "\n")
 			if payload == "" {
 				payload = strings.Join(e.Attachment.AddedNames, "\n")
 			}
+			pendingID := pendingToolSearches[0]
+			pendingToolSearches = pendingToolSearches[1:]
 			if payload == "" {
-				pendingToolSearchID = ""
 				continue
 			}
 			tokens := tokEstimateAs(payload, "deferred_tools_payload")
@@ -218,8 +253,7 @@ func extractToolResultsSnapshot(entries []TranscriptEntry) map[string]interface{
 			g.count++
 			totalTokens += tokens
 			totalCount++
-			resultedIDs[pendingToolSearchID] = true
-			pendingToolSearchID = ""
+			resultedIDs[pendingID] = true
 		}
 	}
 	if totalCount == 0 {
@@ -280,7 +314,7 @@ func resultTokens(content interface{}) int {
 // by the entire skill body — 100K+ tokens for claude-api.
 // `cc.user_prompts.summary`.
 func extractUserPromptsSnapshot(entries []TranscriptEntry) map[string]interface{} {
-	skillBodyTexts := skillBodyTextSet(entries)
+	skillBodyHashes := skillBodyHashSet(entries)
 
 	totalTokens, count := 0, 0
 	for _, e := range entries {
@@ -291,7 +325,7 @@ func extractUserPromptsSnapshot(entries []TranscriptEntry) map[string]interface{
 			if c.Type != "text" {
 				continue
 			}
-			if skillBodyTexts[c.Text] {
+			if skillBodyHashes[sha256hex(c.Text)] {
 				continue
 			}
 			totalTokens += tokEstimateAs(c.Text, "user_prompt")
@@ -310,15 +344,16 @@ func extractUserPromptsSnapshot(entries []TranscriptEntry) map[string]interface{
 	}
 }
 
-// skillBodyTextSet returns the set of user-text strings that are skill
-// bodies (the N+2 text after a Skill tool_use → tool_result pair).
-// Callers use this to avoid counting skill bodies as user prompts.
-func skillBodyTextSet(entries []TranscriptEntry) map[string]bool {
+// skillBodyHashSet returns the set of sha256 hashes of every skill body
+// loaded this session. Comparing by hash (rather than the raw string) is
+// safer against pathological cases where a user prompt happens to equal
+// a small skill body — collisions on sha256 are vanishingly unlikely.
+func skillBodyHashSet(entries []TranscriptEntry) map[string]bool {
 	bodies := buildSkillBodyMap(entries)
 	out := make(map[string]bool, len(bodies))
 	for _, body := range bodies {
 		if body != "" {
-			out[body] = true
+			out[sha256hex(body)] = true
 		}
 	}
 	return out

@@ -524,11 +524,12 @@ func flush(state *State) {
 		return
 	}
 
-	// Build the per-domain snapshots once from the full transcript and the
-	// turn slice, then attach them to every per-message span as
-	// `cc.<domain>.*`.
-	snapshots := buildDomainSnapshots(state.Transcript, entries)
-	spans := processTranscriptEntries(state.TraceID, entries, "", snapshots)
+	// Domain snapshots are written to trace.metadata.cc by postTraceMetrics
+	// (called on Stop / SessionEnd). Per-span metadata stays minimal:
+	// cc.llm_call on every span, cc.skills.load on Skill tool_uses, and
+	// cc.tool on MCP tool_uses. Shipping the full snapshot on every span
+	// inflates the upload payload N× for no extra information.
+	spans := processTranscriptEntries(state.TraceID, entries, "")
 	if len(spans) == 0 {
 		return
 	}
@@ -553,17 +554,15 @@ func processTranscript(traceID, path string, startLine int, parentSpanID string)
 	if err != nil || len(entries) == 0 {
 		return nil
 	}
-	// Subagent path: the agent's transcript is self-contained, so the
-	// snapshot is just its entries — pass nil as the full transcript.
-	return processTranscriptEntries(traceID, entries, parentSpanID, domainSnapshotsFromEntries(entries, entries))
+	return processTranscriptEntries(traceID, entries, parentSpanID)
 }
 
-func processTranscriptEntries(traceID string, entries []TranscriptEntry, parentSpanID string, snapshots map[string]map[string]interface{}) []Span {
+func processTranscriptEntries(traceID string, entries []TranscriptEntry, parentSpanID string) []Span {
 	toolResults := BuildToolResults(entries)
 	taskResults := BuildTaskResults(entries)
 	parsed := ParseAssistantMessages(entries)
 	DeduplicateUsage(parsed)
-	skillBodyForToolUse = buildSkillBodyMap(entries)
+	skillBodies := buildSkillBodyMap(entries)
 
 	effectiveParentSpanID := parentSpanID
 	if effectiveParentSpanID == "" && config.RootSpanID != "" {
@@ -608,13 +607,12 @@ func processTranscriptEntries(traceID string, entries []TranscriptEntry, parentS
 			span.Output = map[string]interface{}{"text": p.Content.Text}
 
 		case "tool_use":
-			processToolUse(&span, p, toolResults, taskResults)
+			processToolUse(&span, p, toolResults, taskResults, skillBodies)
 
 		default:
 			continue
 		}
 
-		applyDomainSnapshots(&span, snapshots)
 		applyLLMCallMetadata(&span, p)
 
 		if p.Usage != nil && span.Usage == nil {
@@ -639,48 +637,20 @@ func processTranscriptEntries(traceID string, entries []TranscriptEntry, parentS
 	return spans
 }
 
-// applyDomainSnapshots writes each `domain → snap` pair into
-// `span.metadata.cc.<domain>.*`. Keys inside each domain are merged in,
-// preserving anything already set on that domain (e.g. `cc.skills.load`
-// written by enrichSkillSpan before this runs).
-func applyDomainSnapshots(span *Span, snapshots map[string]map[string]interface{}) {
-	if len(snapshots) == 0 {
-		return
-	}
-	cc := ensureCCMap(span)
-	for domain, snap := range snapshots {
-		if snap == nil {
-			continue
-		}
-		dom, ok := cc[domain].(map[string]interface{})
-		if !ok {
-			dom = map[string]interface{}{}
-			cc[domain] = dom
-		}
-		for k, v := range snap {
-			dom[k] = v
-		}
-	}
-}
-
-// buildDomainSnapshots reads the full transcript + applies the turn slice
-// already in hand. Returns the per-domain snapshots that get attached to
-// every span and the trace.
-func buildDomainSnapshots(transcriptPath string, turnEntries []TranscriptEntry) map[string]map[string]interface{} {
-	fullEntries, err := ReadTranscript(transcriptPath, 0)
-	if err != nil {
-		debugLog("buildDomainSnapshots: %v", err)
-		fullEntries = turnEntries
-	}
-	return domainSnapshotsFromEntries(fullEntries, turnEntries)
-}
-
+// domainSnapshotsFromEntries returns every per-domain snapshot keyed by
+// domain name. Called by postTraceMetrics for the trace-level write and
+// by dryrun_test for offline validation. The parsed+deduped slice is
+// computed once and passed to the few extractors that need it
+// (extractThinkingSnapshot), avoiding redundant work.
 func domainSnapshotsFromEntries(fullEntries, turnEntries []TranscriptEntry) map[string]map[string]interface{} {
+	parsedTurn := ParseAssistantMessages(turnEntries)
+	DeduplicateUsage(parsedTurn)
+
 	return map[string]map[string]interface{}{
 		"skills":           BuildSkillsSnapshot(fullEntries),
 		"tools":            extractToolsSnapshot(fullEntries),
 		"memory":           extractMemorySnapshot(),
-		"thinking":         extractThinkingSnapshot(turnEntries),
+		"thinking":         extractThinkingSnapshot(turnEntries, parsedTurn),
 		"tool_results":     extractToolResultsSnapshot(turnEntries),
 		"user_prompts":     extractUserPromptsSnapshot(turnEntries),
 		"file_attachments": extractFileAttachmentsSnapshot(turnEntries),
@@ -723,7 +693,7 @@ func ensureCCMap(span *Span) map[string]interface{} {
 	return cc
 }
 
-func processToolUse(span *Span, p ParsedEntry, toolResults map[string]*ToolResultInfo, taskResults map[string]*ToolUseResult) {
+func processToolUse(span *Span, p ParsedEntry, toolResults map[string]*ToolResultInfo, taskResults map[string]*ToolUseResult, skillBodies map[string]string) {
 	rawName := p.Content.Name
 	span.Name = rawName
 	if span.Name == "" {
@@ -733,6 +703,12 @@ func processToolUse(span *Span, p ParsedEntry, toolResults map[string]*ToolResul
 	// bare tool name; surface server + full name as metadata so analytics
 	// can group by server and filtering by the full canonical name still
 	// works.
+	//
+	// SplitN with limit 3 assumes server names contain no `__`. Tool names
+	// CAN contain `__` — they get absorbed into the third part, which is
+	// correct. If an MCP server ever uses `__` in its name (rare), this
+	// would mis-attribute the prefix; fix would be configurable parsing or
+	// a server allowlist.
 	if strings.HasPrefix(rawName, "mcp__") {
 		parts := strings.SplitN(rawName, "__", 3)
 		if len(parts) == 3 {
@@ -815,7 +791,7 @@ func processToolUse(span *Span, p ParsedEntry, toolResults map[string]*ToolResul
 	}
 
 	if span.Name == "Skill" {
-		enrichSkillSpan(span, p, toolResults)
+		enrichSkillSpan(span, p, skillBodies)
 	}
 }
 
@@ -823,9 +799,9 @@ func processToolUse(span *Span, p ParsedEntry, toolResults map[string]*ToolResul
 // `cc.skills.load`. Same identity shape as a `cc.skills.loaded[]` row, so
 // querying for "every span that loaded opik-backend" is one filter on
 // `cc.skills.load.name`.
-func enrichSkillSpan(span *Span, p ParsedEntry, toolResults map[string]*ToolResultInfo) {
+func enrichSkillSpan(span *Span, p ParsedEntry, skillBodies map[string]string) {
 	skillName := skillInputName(p.Content.Input)
-	body := skillBodyForToolUse[p.Content.ID]
+	body := skillBodies[p.Content.ID]
 	path, _ := resolveSkillBody(skillName)
 	source := "bundled"
 	if path != "" {
@@ -850,11 +826,6 @@ func enrichSkillSpan(span *Span, p ParsedEntry, toolResults map[string]*ToolResu
 	}
 	skills["load"] = load
 }
-
-// skillBodyForToolUse is set per-invocation by processTranscriptEntries
-// before walking spans, so enrichSkillSpan can read the body without
-// rebuilding the map for each Skill tool_use.
-var skillBodyForToolUse map[string]string
 
 func compactInput(customInstructions string) string {
 	if customInstructions != "" {

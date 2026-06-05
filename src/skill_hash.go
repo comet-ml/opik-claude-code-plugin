@@ -227,13 +227,40 @@ func appendListingEvents(out []SkillEvent, seen map[string]bool, entry Transcrip
 //  1. <cwd>/.claude/skills/<name>/SKILL.md
 //  2. ~/.claude/skills/<name>/SKILL.md  (symlinks followed)
 //  3. ~/.claude/plugins/marketplaces/<plugin>/skills/<name>/SKILL.md  when name is "<plugin>:<name>"
+//
+// Refuses traversal attempts (path separators or `..` in name). Trust
+// model is Claude-Code-emits-the-name, but a typo or future API quirk
+// shouldn't let us read arbitrary files.
 func resolveSkillBody(name string) (string, string) {
+	if !validSkillName(name) {
+		return "", ""
+	}
 	for _, p := range skillCandidatePaths(name) {
 		if data, err := os.ReadFile(p); err == nil {
 			return p, string(data)
 		}
 	}
 	return "", ""
+}
+
+// validSkillName rejects path separators and parent-dir traversal. The
+// namespace separator `:` is allowed (skill names like `opik:opik` are
+// the plugin-namespaced shape). Empty names rejected.
+func validSkillName(name string) bool {
+	if name == "" {
+		return false
+	}
+	if strings.ContainsAny(name, "/\\") {
+		return false
+	}
+	// Reject "..", "../foo", "foo/..", etc. — the path-separator check
+	// already catches paths; this catches a bare ".." used as a name.
+	for _, part := range strings.Split(name, ":") {
+		if part == ".." || part == "." || part == "" {
+			return false
+		}
+	}
+	return true
 }
 
 func skillCandidatePaths(name string) []string {

@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"os"
+	"strconv"
 )
 
 type TranscriptEntry struct {
@@ -206,12 +207,13 @@ func BuildToolResults(entries []TranscriptEntry) map[string]*ToolResultInfo {
 	results := make(map[string]*ToolResultInfo)
 
 	for _, entry := range entries {
-		if entry.Type != "user" || entry.Message == nil || len(entry.Message.Content) == 0 {
+		if entry.Type != "user" || entry.Message == nil {
 			continue
 		}
-
-		content := entry.Message.Content[0]
-		if content.Type == "tool_result" && content.ToolUseID != "" {
+		for _, content := range entry.Message.Content {
+			if content.Type != "tool_result" || content.ToolUseID == "" {
+				continue
+			}
 			info := &ToolResultInfo{
 				IsError:   content.IsError,
 				Timestamp: entry.Timestamp,
@@ -230,17 +232,30 @@ func BuildTaskResults(entries []TranscriptEntry) map[string]*ToolUseResult {
 	results := make(map[string]*ToolUseResult)
 
 	for _, entry := range entries {
-		if entry.Type != "user" || entry.ToolUseResult == nil {
+		if entry.Type != "user" || entry.ToolUseResult == nil || entry.Message == nil {
 			continue
 		}
-		if entry.Message != nil && len(entry.Message.Content) > 0 {
-			results[entry.Message.Content[0].ToolUseID] = entry.ToolUseResult
+		for _, c := range entry.Message.Content {
+			if c.Type == "tool_result" && c.ToolUseID != "" {
+				results[c.ToolUseID] = entry.ToolUseResult
+			}
 		}
 	}
 
 	return results
 }
 
+// ParseAssistantMessages emits one ParsedEntry per content block in every
+// assistant entry. Claude Code's transcript format almost always puts one
+// block per entry — `[thinking]`, `[text]`, `[tool_use]` each in their own
+// entry sharing the same `message.id`. Rarely (~0.02%) we see multi-block
+// entries like `[thinking, text, tool_use]`. Iterating Content[] handles
+// both shapes uniformly.
+//
+// Span identity: the first block keeps the bare entry UUID for backwards
+// compat with the single-block case (so existing toV7(UUID)-derived span
+// IDs are stable across this change). Subsequent blocks get UUID#N which
+// hashes to a fresh span ID.
 func ParseAssistantMessages(entries []TranscriptEntry) []ParsedEntry {
 	var parsed []ParsedEntry
 
@@ -249,20 +264,24 @@ func ParseAssistantMessages(entries []TranscriptEntry) []ParsedEntry {
 			continue
 		}
 
-		content := entry.Message.Content[0]
-		if content.Type == "" {
-			continue
+		for i, content := range entry.Message.Content {
+			if content.Type == "" {
+				continue
+			}
+			uuid := entry.UUID
+			if i > 0 {
+				uuid = entry.UUID + "#" + strconv.Itoa(i)
+			}
+			parsed = append(parsed, ParsedEntry{
+				UUID:        uuid,
+				Timestamp:   entry.Timestamp,
+				ContentType: content.Type,
+				Content:     content,
+				Usage:       entry.Message.Usage,
+				Model:       entry.Message.Model,
+				MessageID:   entry.Message.ID,
+			})
 		}
-
-		parsed = append(parsed, ParsedEntry{
-			UUID:        entry.UUID,
-			Timestamp:   entry.Timestamp,
-			ContentType: content.Type,
-			Content:     content,
-			Usage:       entry.Message.Usage,
-			Model:       entry.Message.Model,
-			MessageID:   entry.Message.ID,
-		})
 	}
 
 	return parsed
