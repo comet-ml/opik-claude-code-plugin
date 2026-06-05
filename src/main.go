@@ -158,7 +158,7 @@ func onStop() {
 	flush(state)
 	postTraceMetrics(state)
 
-	output := getLastOutput(state)
+	output := getTurnOutput(state)
 	ts := isoNow()
 	finalUpdate := map[string]interface{}{
 		"project_name": config.Project,
@@ -891,22 +891,30 @@ func truncateString(s string, maxLen int) string {
 	return string(runes[:maxLen]) + "..."
 }
 
-func getLastOutput(state *State) string {
+// getTurnOutput returns the assistant text that the trace's `output.text`
+// field should display. Concatenates every assistant text block in the
+// turn — a single turn can produce multiple text responses when the user
+// interrupts mid-flight, or when Claude responds with text both before
+// and after a tool sequence. Iterates every content block so multi-block
+// entries are not silently dropped.
+func getTurnOutput(state *State) string {
 	entries, err := ReadTranscript(state.Transcript, state.StartLine)
 	if err != nil {
 		return ""
 	}
 
-	var lastText string
+	var parts []string
 	for _, entry := range entries {
-		if entry.Type != "assistant" || entry.Message == nil || len(entry.Message.Content) == 0 {
+		if entry.Type != "assistant" || entry.Message == nil {
 			continue
 		}
-		if entry.Message.Content[0].Type == "text" {
-			lastText = entry.Message.Content[0].Text
+		for _, c := range entry.Message.Content {
+			if c.Type == "text" && c.Text != "" {
+				parts = append(parts, c.Text)
+			}
 		}
 	}
-	return lastText
+	return strings.Join(parts, "\n\n")
 }
 
 func countLines(path string) int {
