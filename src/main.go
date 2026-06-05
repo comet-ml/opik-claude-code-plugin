@@ -82,6 +82,28 @@ func main() {
 }
 
 func onPrompt() {
+	// Duplicate-fire guard: Claude Code's `claude -p --resume` path fires
+	// UserPromptSubmit twice within ~2ms with the same prompt — a race
+	// that can't be caught by state-file dedup alone. Defense in depth:
+	//
+	//   1. Deterministic trace ID below — both concurrent calls compute
+	//      the same toV7 output, so a duplicate POST either no-ops on the
+	//      server (409 on existing ID) or upserts onto the same row.
+	//   2. State-based dedup — when the second call DOES manage to read
+	//      the first's saved state, return early without re-POSTing.
+	//
+	// Bucket window: 5 seconds. Same session + prompt within 5s → same
+	// trace ID. Different bucket → fresh trace (so a user typing the
+	// same prompt twice on purpose still gets distinct traces).
+	promptHash := sha256hex(input.Prompt)
+	now := time.Now().Unix()
+	if prev, err := LoadState(input.SessionID); err == nil && prev != nil {
+		if prev.PromptHash == promptHash && now-prev.StartUnix <= 5 {
+			debugLog("onPrompt: duplicate within %ds — reusing trace=%s", now-prev.StartUnix, prev.TraceID)
+			return
+		}
+	}
+
 	startLine := 0
 	if input.TranscriptPath != "" {
 		startLine = countLines(input.TranscriptPath)
@@ -89,7 +111,8 @@ func onPrompt() {
 
 	traceID := config.ParentTraceID
 	if traceID == "" {
-		traceID = uuid7()
+		bucket := now / 5
+		traceID = toV7(fmt.Sprintf("trace:%s:%s:%d", input.SessionID, promptHash, bucket))
 	}
 	ts := isoNow()
 
@@ -97,10 +120,12 @@ func onPrompt() {
 	state := &State{
 		TraceID:      traceID,
 		StartTime:    ts,
+		StartUnix:    now,
+		PromptHash:   promptHash,
 		SessionID:    input.SessionID,
 		Transcript:   input.TranscriptPath,
 		StartLine:    startLine,
-		LastFlush:    time.Now().Unix(),
+		LastFlush:    now,
 		Cwd:          cwd,
 		HeadSHAStart: headStart,
 	}
@@ -113,7 +138,7 @@ func onPrompt() {
 	if config.ParentTraceID == "" {
 		trace := Trace{
 			ID:          traceID,
-			Name:        "claude-code",
+			Name:        traceNameFromPrompt(input.Prompt),
 			StartTime:   ts,
 			ProjectName: config.Project,
 			ThreadID:    input.SessionID,
@@ -158,7 +183,7 @@ func onStop() {
 	flush(state)
 	postTraceMetrics(state)
 
-	output := getLastOutput(state)
+	output := getTurnOutput(state)
 	ts := isoNow()
 	finalUpdate := map[string]interface{}{
 		"project_name": config.Project,
@@ -166,14 +191,7 @@ func onStop() {
 		"output":       map[string]string{"text": output},
 	}
 
-	if !state.SlugSent {
-		allEntries, err := ReadTranscript(state.Transcript, 0)
-		if err == nil {
-			if slug := findSlug(allEntries); slug != "" {
-				finalUpdate["name"] = slug
-			}
-		}
-	}
+	// Name was set from the user prompt at creation; don't overwrite here.
 
 	if err := api.Patch("/traces/"+state.TraceID, finalUpdate); err != nil {
 		debugLog("update trace: %v", err)
@@ -223,6 +241,8 @@ func onCompact() {
 		}
 
 		if config.ParentTraceID == "" {
+			// Compaction has no user prompt — keep the default name and
+			// let the slug/aiTitle PATCH below fill it in if we find one.
 			trace := Trace{
 				ID:          traceID,
 				Name:        "claude-code",
@@ -247,7 +267,9 @@ func onCompact() {
 
 	compactTraceID := uuid7()
 	ts := isoNow()
-	traceName := "claude-code"
+	// Compaction has no per-turn user prompt — fall back to the session-level
+	// aiTitle (or legacy slug) so the trace at least has a meaningful label.
+	traceName := "Compaction"
 	allEntries, err := ReadTranscript(state.Transcript, 0)
 	if err == nil {
 		if slug := findSlug(allEntries); slug != "" {
@@ -490,17 +512,16 @@ func extractSubagentPrompt(path string) string {
 }
 
 func flush(state *State) {
+	// Trace name is set at creation from the user prompt (or to "claude-code"
+	// for compaction). We don't overwrite it later with the session-level
+	// aiTitle — that would collapse every per-turn trace name into the same
+	// title. The slug PATCH path is preserved only to backfill the model
+	// once we see an assistant message.
 	if !state.SlugSent {
 		allEntries, err := ReadTranscript(state.Transcript, 0)
 		if err == nil && len(allEntries) > 0 {
 			updates := map[string]interface{}{
 				"project_name": config.Project,
-			}
-
-			slug := findSlug(allEntries)
-			debugLog("findSlug: allEntries=%d slug=%q", len(allEntries), slug)
-			if slug != "" {
-				updates["name"] = slug
 			}
 
 			if config.ParentTraceID == "" {
@@ -512,7 +533,7 @@ func flush(state *State) {
 			if len(updates) > 1 { // More than just project_name
 				if err := api.Patch("/traces/"+state.TraceID, updates); err != nil {
 					debugLog("update trace metadata: %v", err)
-				} else if slug != "" {
+				} else {
 					state.SlugSent = true
 				}
 			}
@@ -524,6 +545,11 @@ func flush(state *State) {
 		return
 	}
 
+	// Domain snapshots are written to trace.metadata.cc by postTraceMetrics
+	// (called on Stop / SessionEnd). Per-span metadata stays minimal:
+	// cc.llm_call on every span, cc.skills.load on Skill tool_uses, and
+	// cc.tool on MCP tool_uses. Shipping the full snapshot on every span
+	// inflates the upload payload N× for no extra information.
 	spans := processTranscriptEntries(state.TraceID, entries, "")
 	if len(spans) == 0 {
 		return
@@ -535,13 +561,36 @@ func flush(state *State) {
 	}
 }
 
+// findSlug returns the best per-session identifier available on the
+// transcript. Historic shape: per-entry `slug` (session-stable kebab-case).
+// Claude Code 2.1.150+ shape: dedicated `type:"ai-title"` events carrying
+// `aiTitle` (human-meaningful session title). Both supported.
 func findSlug(entries []TranscriptEntry) string {
 	for _, entry := range entries {
+		if entry.AITitle != "" {
+			return entry.AITitle
+		}
 		if entry.Slug != "" {
 			return entry.Slug
 		}
 	}
 	return ""
+}
+
+// traceNameFromPrompt returns a trace-friendly name from a user prompt.
+// Trims, collapses whitespace, truncates so the trace list stays readable.
+// Falls back to "claude-code" for empty prompts.
+func traceNameFromPrompt(prompt string) string {
+	s := strings.TrimSpace(prompt)
+	if s == "" {
+		return "claude-code"
+	}
+	s = strings.Join(strings.Fields(s), " ")
+	const maxLen = 80
+	if len(s) > maxLen {
+		s = s[:maxLen-1] + "…"
+	}
+	return s
 }
 
 func processTranscript(traceID, path string, startLine int, parentSpanID string) []Span {
@@ -557,6 +606,7 @@ func processTranscriptEntries(traceID string, entries []TranscriptEntry, parentS
 	taskResults := BuildTaskResults(entries)
 	parsed := ParseAssistantMessages(entries)
 	DeduplicateUsage(parsed)
+	skillBodies := buildSkillBodyMap(entries)
 
 	effectiveParentSpanID := parentSpanID
 	if effectiveParentSpanID == "" && config.RootSpanID != "" {
@@ -601,11 +651,13 @@ func processTranscriptEntries(traceID string, entries []TranscriptEntry, parentS
 			span.Output = map[string]interface{}{"text": p.Content.Text}
 
 		case "tool_use":
-			processToolUse(&span, p, toolResults, taskResults)
+			processToolUse(&span, p, toolResults, taskResults, skillBodies)
 
 		default:
 			continue
 		}
+
+		applyLLMCallMetadata(&span, p)
 
 		if p.Usage != nil && span.Usage == nil {
 			span.Usage = map[string]int{
@@ -629,10 +681,90 @@ func processTranscriptEntries(traceID string, entries []TranscriptEntry, parentS
 	return spans
 }
 
-func processToolUse(span *Span, p ParsedEntry, toolResults map[string]*ToolResultInfo, taskResults map[string]*ToolUseResult) {
-	span.Name = p.Content.Name
+// domainSnapshotsFromEntries returns every per-domain snapshot keyed by
+// domain name. Called by postTraceMetrics for the trace-level write and
+// by dryrun_test for offline validation. The parsed+deduped slice is
+// computed once and passed to the few extractors that need it
+// (extractThinkingSnapshot), avoiding redundant work.
+func domainSnapshotsFromEntries(fullEntries, turnEntries []TranscriptEntry) map[string]map[string]interface{} {
+	parsedTurn := ParseAssistantMessages(turnEntries)
+	DeduplicateUsage(parsedTurn)
+
+	return map[string]map[string]interface{}{
+		"skills":           BuildSkillsSnapshot(fullEntries),
+		"tools":            extractToolsSnapshot(fullEntries),
+		"memory":           extractMemorySnapshot(),
+		"thinking":         extractThinkingSnapshot(turnEntries, parsedTurn),
+		"tool_results":     extractToolResultsSnapshot(turnEntries),
+		"user_prompts":     extractUserPromptsSnapshot(turnEntries),
+		"file_attachments": extractFileAttachmentsSnapshot(turnEntries),
+		"prior_assistant":  extractPriorAssistantSnapshot(fullEntries, turnEntries),
+		"assistant_text":   extractAssistantTextSnapshot(turnEntries),
+	}
+}
+
+// applyLLMCallMetadata tags every per-message span with its origin in the
+// transcript. Critical for analysis: Claude Code splits a single LLM call
+// into multiple transcript entries (one per content block), all sharing
+// the same `message.id` and `message.usage`. DeduplicateUsage attaches the
+// total usage to only the first block, so naive `GROUP BY span.name` over
+// `usage` looks like all tokens came from Thinking. Consumers should
+// `GROUP BY cc.llm_call.message_id` to reconstruct the true per-call
+// totals.
+func applyLLMCallMetadata(span *Span, p ParsedEntry) {
+	if p.MessageID == "" {
+		return
+	}
+	cc := ensureCCMap(span)
+	cc["llm_call"] = map[string]interface{}{
+		"message_id":               p.MessageID,
+		"block_index":              p.BlockIndex,
+		"block_kind":               p.ContentType, // "thinking" | "text" | "tool_use"
+		"measured_output_tokens":   p.MeasuredOutputTokens,
+		"attributed_output_tokens": p.AttributedOutputTokens,
+	}
+}
+
+func ensureCCMap(span *Span) map[string]interface{} {
+	if span.Metadata == nil {
+		span.Metadata = map[string]interface{}{}
+	}
+	cc, ok := span.Metadata["cc"].(map[string]interface{})
+	if !ok {
+		cc = map[string]interface{}{}
+		span.Metadata["cc"] = cc
+	}
+	return cc
+}
+
+func processToolUse(span *Span, p ParsedEntry, toolResults map[string]*ToolResultInfo, taskResults map[string]*ToolUseResult, skillBodies map[string]string) {
+	rawName := p.Content.Name
+	span.Name = rawName
 	if span.Name == "" {
 		span.Name = "Tool"
+	}
+	// MCP tools come over the wire as `mcp__<server>__<tool>`. Display the
+	// bare tool name; surface server + full name as metadata so analytics
+	// can group by server and filtering by the full canonical name still
+	// works.
+	//
+	// SplitN with limit 3 assumes server names contain no `__`. Tool names
+	// CAN contain `__` — they get absorbed into the third part, which is
+	// correct. If an MCP server ever uses `__` in its name (rare), this
+	// would mis-attribute the prefix; fix would be configurable parsing or
+	// a server allowlist.
+	if strings.HasPrefix(rawName, "mcp__") {
+		parts := strings.SplitN(rawName, "__", 3)
+		if len(parts) == 3 {
+			cc := ensureCCMap(span)
+			cc["tool"] = map[string]interface{}{
+				"name":   parts[2],
+				"server": parts[1],
+				"source": "mcp",
+				"full":   rawName,
+			}
+			span.Name = parts[2]
+		}
 	}
 	span.Type = "tool"
 	span.Input = p.Content.Input
@@ -701,6 +833,42 @@ func processToolUse(span *Span, p ParsedEntry, toolResults map[string]*ToolResul
 			span.Output = map[string]interface{}{}
 		}
 	}
+
+	if span.Name == "Skill" {
+		enrichSkillSpan(span, p, skillBodies)
+	}
+}
+
+// enrichSkillSpan stamps a `Skill` tool_use span with the load event under
+// `cc.skills.load`. Same identity shape as a `cc.skills.loaded[]` row, so
+// querying for "every span that loaded opik-backend" is one filter on
+// `cc.skills.load.name`.
+func enrichSkillSpan(span *Span, p ParsedEntry, skillBodies map[string]string) {
+	skillName := skillInputName(p.Content.Input)
+	body := skillBodies[p.Content.ID]
+	path, _ := resolveSkillBody(skillName)
+	source := "bundled"
+	if path != "" {
+		source = "listing"
+	}
+	load := map[string]interface{}{
+		"name":        skillName,
+		"source":      source,
+		"sha256":      sha256hex(body),
+		"body_tokens": tokEstimateAs(body, "skill_body"),
+		"tool_use_id": p.Content.ID,
+	}
+	if path != "" {
+		load["path"] = path
+	}
+
+	cc := ensureCCMap(span)
+	skills, ok := cc["skills"].(map[string]interface{})
+	if !ok {
+		skills = map[string]interface{}{}
+		cc["skills"] = skills
+	}
+	skills["load"] = load
 }
 
 func compactInput(customInstructions string) string {
@@ -748,22 +916,30 @@ func truncateString(s string, maxLen int) string {
 	return string(runes[:maxLen]) + "..."
 }
 
-func getLastOutput(state *State) string {
+// getTurnOutput returns the assistant text that the trace's `output.text`
+// field should display. Concatenates every assistant text block in the
+// turn — a single turn can produce multiple text responses when the user
+// interrupts mid-flight, or when Claude responds with text both before
+// and after a tool sequence. Iterates every content block so multi-block
+// entries are not silently dropped.
+func getTurnOutput(state *State) string {
 	entries, err := ReadTranscript(state.Transcript, state.StartLine)
 	if err != nil {
 		return ""
 	}
 
-	var lastText string
+	var parts []string
 	for _, entry := range entries {
-		if entry.Type != "assistant" || entry.Message == nil || len(entry.Message.Content) == 0 {
+		if entry.Type != "assistant" || entry.Message == nil {
 			continue
 		}
-		if entry.Message.Content[0].Type == "text" {
-			lastText = entry.Message.Content[0].Text
+		for _, c := range entry.Message.Content {
+			if c.Type == "text" && c.Text != "" {
+				parts = append(parts, c.Text)
+			}
 		}
 	}
-	return lastText
+	return strings.Join(parts, "\n\n")
 }
 
 func countLines(path string) int {

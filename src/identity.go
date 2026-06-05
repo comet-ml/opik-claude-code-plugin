@@ -49,8 +49,10 @@ func loadClaudeIdentity() ClaudeIdentity {
 	}
 }
 
-// applyToTrace stamps identity onto a Trace's metadata and adds a `user:<email>`
-// tag for quick filtering in the Opik UI. No-op when identity is empty.
+// applyToTrace stamps identity onto a Trace's metadata under cc.identity.*
+// and adds a `user:<email>` tag for quick filtering. No-op when identity
+// is empty. Grouped under cc.identity (not at cc top level) so cc.* stays
+// dominated by domain snapshots (skills, tools, memory, …).
 func (i ClaudeIdentity) applyToTrace(t *Trace) {
 	if i.Email == "" && i.UserUUID == "" {
 		return
@@ -58,23 +60,28 @@ func (i ClaudeIdentity) applyToTrace(t *Trace) {
 	if t.Metadata == nil {
 		t.Metadata = map[string]interface{}{}
 	}
-	cc := map[string]interface{}{}
+	cc, ok := t.Metadata["cc"].(map[string]interface{})
+	if !ok {
+		cc = map[string]interface{}{}
+		t.Metadata["cc"] = cc
+	}
+	identity := map[string]interface{}{}
 	if i.Email != "" {
-		cc["user_email"] = i.Email
+		identity["user_email"] = i.Email
 	}
 	if i.UserUUID != "" {
-		cc["user_uuid"] = i.UserUUID
+		identity["user_uuid"] = i.UserUUID
 	}
 	if i.DisplayName != "" {
-		cc["user_display_name"] = i.DisplayName
+		identity["user_display_name"] = i.DisplayName
 	}
 	if i.OrgUUID != "" {
-		cc["org_uuid"] = i.OrgUUID
+		identity["org_uuid"] = i.OrgUUID
 	}
 	if i.OrgName != "" {
-		cc["org_name"] = i.OrgName
+		identity["org_name"] = i.OrgName
 	}
-	t.Metadata["cc"] = cc
+	cc["identity"] = identity
 
 	if i.Email != "" {
 		t.Tags = append(t.Tags, "user:"+i.Email)
