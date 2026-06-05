@@ -82,6 +82,28 @@ func main() {
 }
 
 func onPrompt() {
+	// Duplicate-fire guard: Claude Code's `claude -p --resume` path fires
+	// UserPromptSubmit twice within ~2ms with the same prompt — a race
+	// that can't be caught by state-file dedup alone. Defense in depth:
+	//
+	//   1. Deterministic trace ID below — both concurrent calls compute
+	//      the same toV7 output, so a duplicate POST either no-ops on the
+	//      server (409 on existing ID) or upserts onto the same row.
+	//   2. State-based dedup — when the second call DOES manage to read
+	//      the first's saved state, return early without re-POSTing.
+	//
+	// Bucket window: 5 seconds. Same session + prompt within 5s → same
+	// trace ID. Different bucket → fresh trace (so a user typing the
+	// same prompt twice on purpose still gets distinct traces).
+	promptHash := sha256hex(input.Prompt)
+	now := time.Now().Unix()
+	if prev, err := LoadState(input.SessionID); err == nil && prev != nil {
+		if prev.PromptHash == promptHash && now-prev.StartUnix <= 5 {
+			debugLog("onPrompt: duplicate within %ds — reusing trace=%s", now-prev.StartUnix, prev.TraceID)
+			return
+		}
+	}
+
 	startLine := 0
 	if input.TranscriptPath != "" {
 		startLine = countLines(input.TranscriptPath)
@@ -89,7 +111,8 @@ func onPrompt() {
 
 	traceID := config.ParentTraceID
 	if traceID == "" {
-		traceID = uuid7()
+		bucket := now / 5
+		traceID = toV7(fmt.Sprintf("trace:%s:%s:%d", input.SessionID, promptHash, bucket))
 	}
 	ts := isoNow()
 
@@ -97,10 +120,12 @@ func onPrompt() {
 	state := &State{
 		TraceID:      traceID,
 		StartTime:    ts,
+		StartUnix:    now,
+		PromptHash:   promptHash,
 		SessionID:    input.SessionID,
 		Transcript:   input.TranscriptPath,
 		StartLine:    startLine,
-		LastFlush:    time.Now().Unix(),
+		LastFlush:    now,
 		Cwd:          cwd,
 		HeadSHAStart: headStart,
 	}
