@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -81,6 +82,45 @@ func TestAttributionInvariant(t *testing.T) {
 	t.Logf("%d/%d LLM-call groups attribution-clean", checked-mismatches, checked)
 	if mismatches > 0 {
 		t.Errorf("%d mismatch(es)", mismatches)
+	}
+}
+
+// TestTraceNameResolution verifies findSlug finds aiTitle in the new
+// transcript format (Claude Code 2.1.150+) and that traceNameFromPrompt
+// produces sensible output.
+func TestTraceNameResolution(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"", "claude-code"},
+		{"  ", "claude-code"},
+		{"hello", "hello"},
+		{"  hello  world  ", "hello world"},
+	}
+	for _, c := range cases {
+		got := traceNameFromPrompt(c.in)
+		if got != c.want {
+			t.Errorf("traceNameFromPrompt(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+	long := "a very long prompt that exceeds the eighty character maximum and should be truncated to something readable"
+	got := traceNameFromPrompt(long)
+	if !strings.HasSuffix(got, "…") || len([]rune(got)) > 80 {
+		t.Errorf("traceNameFromPrompt(long) = %q (len=%d), expected ≤80 runes ending in …", got, len([]rune(got)))
+	}
+
+	// findSlug should pick aiTitle when present.
+	entries := []TranscriptEntry{
+		{Type: "user"},
+		{Type: "ai-title", AITitle: "Testing session for command execution"},
+		{Type: "assistant"},
+	}
+	if got := findSlug(entries); got != "Testing session for command execution" {
+		t.Errorf("findSlug picked %q, want aiTitle", got)
+	}
+
+	// Legacy slug still works when aiTitle is absent.
+	legacy := []TranscriptEntry{{Type: "assistant", Slug: "happy-crafting-lamport"}}
+	if got := findSlug(legacy); got != "happy-crafting-lamport" {
+		t.Errorf("findSlug picked %q, want legacy slug", got)
 	}
 }
 

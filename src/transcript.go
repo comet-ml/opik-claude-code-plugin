@@ -13,6 +13,7 @@ type TranscriptEntry struct {
 	UUID          string         `json:"uuid"`
 	Timestamp     string         `json:"timestamp"`
 	Slug          string         `json:"slug,omitempty"`
+	AITitle       string         `json:"aiTitle,omitempty"` // populated on type:"ai-title" events
 	Message       *Message       `json:"message,omitempty"`
 	ToolUseResult *ToolUseResult `json:"toolUseResult,omitempty"`
 	Attachment    *Attachment    `json:"attachment,omitempty"`

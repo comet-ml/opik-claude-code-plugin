@@ -113,7 +113,7 @@ func onPrompt() {
 	if config.ParentTraceID == "" {
 		trace := Trace{
 			ID:          traceID,
-			Name:        "claude-code",
+			Name:        traceNameFromPrompt(input.Prompt),
 			StartTime:   ts,
 			ProjectName: config.Project,
 			ThreadID:    input.SessionID,
@@ -166,14 +166,7 @@ func onStop() {
 		"output":       map[string]string{"text": output},
 	}
 
-	if !state.SlugSent {
-		allEntries, err := ReadTranscript(state.Transcript, 0)
-		if err == nil {
-			if slug := findSlug(allEntries); slug != "" {
-				finalUpdate["name"] = slug
-			}
-		}
-	}
+	// Name was set from the user prompt at creation; don't overwrite here.
 
 	if err := api.Patch("/traces/"+state.TraceID, finalUpdate); err != nil {
 		debugLog("update trace: %v", err)
@@ -223,6 +216,8 @@ func onCompact() {
 		}
 
 		if config.ParentTraceID == "" {
+			// Compaction has no user prompt — keep the default name and
+			// let the slug/aiTitle PATCH below fill it in if we find one.
 			trace := Trace{
 				ID:          traceID,
 				Name:        "claude-code",
@@ -247,7 +242,9 @@ func onCompact() {
 
 	compactTraceID := uuid7()
 	ts := isoNow()
-	traceName := "claude-code"
+	// Compaction has no per-turn user prompt — fall back to the session-level
+	// aiTitle (or legacy slug) so the trace at least has a meaningful label.
+	traceName := "Compaction"
 	allEntries, err := ReadTranscript(state.Transcript, 0)
 	if err == nil {
 		if slug := findSlug(allEntries); slug != "" {
@@ -490,17 +487,16 @@ func extractSubagentPrompt(path string) string {
 }
 
 func flush(state *State) {
+	// Trace name is set at creation from the user prompt (or to "claude-code"
+	// for compaction). We don't overwrite it later with the session-level
+	// aiTitle — that would collapse every per-turn trace name into the same
+	// title. The slug PATCH path is preserved only to backfill the model
+	// once we see an assistant message.
 	if !state.SlugSent {
 		allEntries, err := ReadTranscript(state.Transcript, 0)
 		if err == nil && len(allEntries) > 0 {
 			updates := map[string]interface{}{
 				"project_name": config.Project,
-			}
-
-			slug := findSlug(allEntries)
-			debugLog("findSlug: allEntries=%d slug=%q", len(allEntries), slug)
-			if slug != "" {
-				updates["name"] = slug
 			}
 
 			if config.ParentTraceID == "" {
@@ -512,7 +508,7 @@ func flush(state *State) {
 			if len(updates) > 1 { // More than just project_name
 				if err := api.Patch("/traces/"+state.TraceID, updates); err != nil {
 					debugLog("update trace metadata: %v", err)
-				} else if slug != "" {
+				} else {
 					state.SlugSent = true
 				}
 			}
@@ -540,13 +536,36 @@ func flush(state *State) {
 	}
 }
 
+// findSlug returns the best per-session identifier available on the
+// transcript. Historic shape: per-entry `slug` (session-stable kebab-case).
+// Claude Code 2.1.150+ shape: dedicated `type:"ai-title"` events carrying
+// `aiTitle` (human-meaningful session title). Both supported.
 func findSlug(entries []TranscriptEntry) string {
 	for _, entry := range entries {
+		if entry.AITitle != "" {
+			return entry.AITitle
+		}
 		if entry.Slug != "" {
 			return entry.Slug
 		}
 	}
 	return ""
+}
+
+// traceNameFromPrompt returns a trace-friendly name from a user prompt.
+// Trims, collapses whitespace, truncates so the trace list stays readable.
+// Falls back to "claude-code" for empty prompts.
+func traceNameFromPrompt(prompt string) string {
+	s := strings.TrimSpace(prompt)
+	if s == "" {
+		return "claude-code"
+	}
+	s = strings.Join(strings.Fields(s), " ")
+	const maxLen = 80
+	if len(s) > maxLen {
+		s = s[:maxLen-1] + "…"
+	}
+	return s
 }
 
 func processTranscript(traceID, path string, startLine int, parentSpanID string) []Span {
