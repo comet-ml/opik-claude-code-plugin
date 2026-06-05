@@ -65,19 +65,41 @@ All plugin env vars use the `OPIK_CC_` prefix to avoid conflicts with standard O
 
 `OPIK_CC_WORKSPACE` and `OPIK_CC_PROJECT` let you send Claude Code traces to a different
 workspace/project than the rest of your Opik setup, without touching the global
-`OPIK_WORKSPACE` / `project_name` in `~/.opik.config` used by the Opik SDK. Both can also be
-set in `~/.opik.config` via the plugin-scoped `cc_workspace` and `cc_project` keys:
+`OPIK_WORKSPACE` in your environment. You can also keep the plugin's settings in a dedicated
+`[opik_cc]` section of `~/.opik.config`:
 
 ```ini
 [opik]
+url_override = https://www.comet.com/opik/api/
+api_key = your-api-key
 workspace = my-sdk-workspace      # used by the Opik SDK
 project_name = my-sdk-project     # used by the Opik SDK
-cc_workspace = my-cc-workspace        # used only by the Claude Code plugin
-cc_project_name = my-cc-project       # used only by the Claude Code plugin
+
+[opik_cc]
+workspace = comet-all             # used by the Claude Code plugin
+project_name = claude-code        # used by the Claude Code plugin
 ```
 
-> Note: for backward compatibility, if `cc_project_name` is not set the plugin still falls back
-> to the shared `project_name` key.
+> **Place `[opik_cc]` below `[opik]`.** The plugin reads the keys it recognizes (`workspace`,
+> `project_name`, `url_override`, `api_key`) from the whole file, with later values overriding
+> earlier ones — so the `[opik_cc]` values win only when that section comes last. The
+> environment variables (`OPIK_CC_WORKSPACE`, `OPIK_CC_PROJECT`) always take precedence over
+> the file.
+
+You can also override `url_override` and `api_key` in `[opik_cc]` to point Claude Code traces
+at a **different Opik instance** than the SDK:
+
+```ini
+[opik_cc]
+url_override = https://my-other-opik/api/   # different Opik instance for the plugin
+api_key = other-instance-api-key            # must match that instance
+workspace = comet-all
+project_name = claude-code
+```
+
+> Set `url_override` and `api_key` together — a URL pointing at one instance with the other
+> instance's key will fail auth. `OPIK_BASE_URL` (env) is the simpler way to point only the
+> plugin at a different URL, and always wins over the file.
 
 ### External Trace Linking
 
