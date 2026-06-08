@@ -67,7 +67,9 @@ For org-wide deployment, push configuration through [Claude Code's server-manage
     "OPIK_CC_WORKSPACE": "your-org-cc-workspace",
     "OPIK_API_KEY": "<workspace-scoped API key>",
     "OPIK_CC_PROJECT": "cc-{username}"
-  }
+  },
+  "forceRemoteSettingsRefresh": true,
+  "showThinkingSummaries": true
 }
 ```
 
@@ -78,6 +80,8 @@ What each piece does:
 - `OPIK_CC_WORKSPACE` — sends Claude Code traces to a dedicated workspace, isolated from any user's personal Opik work in `~/.opik.config`.
 - `OPIK_API_KEY` — the workspace-scoped key the hook uses to write traces. Treat this file as sensitive; the API key is shared with every machine it's deployed to. Provision a key with the minimum write scope on the CC workspace.
 - `OPIK_CC_PROJECT` — supports `{field}` tokens that expand from the user's Claude Code OAuth identity (read from `~/.claude.json`). So one config string routes every user to their own project.
+- `forceRemoteSettingsRefresh: true` — fail-closed startup: blocks the CLI at launch until fresh managed settings are fetched from Anthropic, so the brief unenforced window on first launch can't leak unmonitored sessions. Requires connectivity to `api.anthropic.com`.
+- `showThinkingSummaries: true` — surfaces extended-thinking summaries in the user's transcript so the same reasoning that gets traced to Opik is visible to the user locally. Optional but useful when you want what's logged to match what users see.
 
 **Available `{field}` tokens:**
 
