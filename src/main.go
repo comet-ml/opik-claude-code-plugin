@@ -694,6 +694,7 @@ func domainSnapshotsFromEntries(fullEntries, turnEntries []TranscriptEntry) map[
 		"skills":           BuildSkillsSnapshot(fullEntries),
 		"tools":            extractToolsSnapshot(fullEntries),
 		"memory":           extractMemorySnapshot(),
+		"agents":           extractAgentsSnapshot(),
 		"thinking":         extractThinkingSnapshot(turnEntries, parsedTurn),
 		"tool_results":     extractToolResultsSnapshot(turnEntries),
 		"user_prompts":     extractUserPromptsSnapshot(turnEntries),

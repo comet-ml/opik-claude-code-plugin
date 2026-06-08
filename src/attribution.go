@@ -22,16 +22,28 @@ func ExtractAttribution(entries []TranscriptEntry) *Attribution {
 func BuildSkillsSnapshot(allEntries []TranscriptEntry) map[string]interface{} {
 	listing := extractSkillEvents(allEntries)
 	loaded := extractLoadedSkills(allEntries)
-	menuTokens := extractSkillMenuTokens(allEntries)
-	if len(listing) == 0 && len(loaded) == 0 && menuTokens == 0 {
+	attachmentTokens := extractSkillMenuTokens(allEntries)
+	if len(listing) == 0 && len(loaded) == 0 && attachmentTokens == 0 {
 		return nil
 	}
 
+	// menu_tokens is the always-on cost of the skill menu: summed per skill
+	// from each skill's name + frontmatter description (what /context's
+	// /skills view attributes per row). Bundled (in-binary) skills can't be
+	// read from disk, so they contribute 0 — bundled_count surfaces how much
+	// of /context's number we structurally cannot reach.
 	available := make([]map[string]interface{}, 0, len(listing))
+	menuTokens := 0
+	bundledCount := 0
 	for _, s := range listing {
+		menuTokens += s.MenuTokens
+		if s.Source == "bundled" {
+			bundledCount++
+		}
 		e := map[string]interface{}{
-			"name":   s.Name,
-			"source": s.Source,
+			"name":        s.Name,
+			"source":      s.Source,
+			"menu_tokens": s.MenuTokens,
 		}
 		if s.SHA256 != "" {
 			e["sha256"] = s.SHA256
@@ -66,6 +78,12 @@ func BuildSkillsSnapshot(allEntries []TranscriptEntry) map[string]interface{} {
 			"loaded_tokens":   loadedTokens,
 			"available_count": len(available),
 			"loaded_count":    len(loadedOut),
+			"bundled_count":   bundledCount,
+			// The token estimate of the raw skill_listing attachment in the
+			// transcript, kept for cross-checking. It differs from menu_tokens:
+			// the attachment is a partial artifact, whereas menu_tokens is
+			// reconstructed per skill from on-disk frontmatter.
+			"menu_tokens_attachment": attachmentTokens,
 		},
 		"available": available,
 		"loaded":    loadedOut,

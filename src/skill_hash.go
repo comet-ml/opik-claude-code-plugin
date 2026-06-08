@@ -19,8 +19,9 @@ type SkillEvent struct {
 	Name         string `json:"name"`
 	SHA256       string `json:"sha256"`
 	BodyTokens   int    `json:"body_tokens"`
+	MenuTokens   int    `json:"menu_tokens"` // always-on menu cost: name + frontmatter description
 	FirstSeenIdx int    `json:"first_seen_idx"`
-	Source       string `json:"source"` // "listing" | "bundled"
+	Source       string `json:"source"` // "project" | "user" | "plugin" | "bundled"
 	Path         string `json:"path,omitempty"`
 	ToolUseID    string `json:"tool_use_id,omitempty"` // toolu_… id of the load event
 }
@@ -192,32 +193,111 @@ func appendListingEvents(out []SkillEvent, seen map[string]bool, entry Transcrip
 	for _, name := range entry.Attachment.Names {
 		path, body := resolveSkillBody(name)
 		var bodyHash string
-		var bodyTokens int
-		source := "listing"
-		if body == "" {
-			// Bundled skill (no on-disk file) — Claude Code ships the body
-			// in the binary. Mark it so the FE can render it differently.
-			source = "bundled"
-		} else {
+		var bodyTokens, menuTokens int
+		if body != "" {
 			bodyHash = sha256hex(body)
 			bodyTokens = tokEstimateAs(body, "skill_body")
+			menuTokens = skillMenuTokens(name, body)
 		}
 		key := name + "|" + bodyHash
 		if seen[key] {
 			continue
 		}
 		seen[key] = true
-		evt := SkillEvent{
+		out = append(out, SkillEvent{
 			Name:         name,
 			SHA256:       bodyHash,
 			BodyTokens:   bodyTokens,
+			MenuTokens:   menuTokens,
 			FirstSeenIdx: idx,
-			Source:       source,
-		}
-		evt.Path = path
-		out = append(out, evt)
+			Source:       classifySkillSource(path),
+			Path:         path,
+		})
 	}
 	return out
+}
+
+// skillMenuTokens estimates what one skill costs in the always-on skill
+// menu: its name plus the frontmatter `description` (the per-row text
+// `/skills` shows). SKILL.md files carry a description; slash-command files
+// usually don't, so they cost ~just the name — matching /context, where
+// commands without a description sit in the "< 20 tokens" bucket. Bundled
+// skills (no on-disk file — Claude Code ships them in the binary) return 0;
+// we can't read the binary's copy, so that part of /context's total is a
+// known, unrecoverable gap.
+func skillMenuTokens(name, body string) int {
+	if body == "" {
+		return 0
+	}
+	fm := frontmatter(body)
+	if fm == "" {
+		// Slash-command files with no frontmatter cost ~just the name.
+		return tokEstimateAs(name, "prose")
+	}
+	desc := frontmatterField(fm, "description")
+	if desc == "" {
+		return tokEstimateAs(name, "prose")
+	}
+	// Only name + description reach the menu — NOT other frontmatter fields
+	// like `compatibility:` or `metadata:`, which some skills (the
+	// signals-scout-* family) carry and which would otherwise inflate the
+	// estimate well past what /context attributes.
+	return tokEstimateAs(name+": "+desc, "skill_body")
+}
+
+// frontmatterField pulls a single scalar field out of a YAML frontmatter
+// block. Handles the three shapes skill descriptions actually use:
+//
+//	description: plain text on one line
+//	description: 'single' / "double" quoted
+//	description: > | block scalar, value on the following indented lines
+//
+// A block scalar ends at the next top-level key (a line starting in column
+// 0 with `key:`) or end of frontmatter. Good enough for menu sizing; not a
+// general YAML parser.
+func frontmatterField(fm, key string) string {
+	lines := strings.Split(fm, "\n")
+	for i, line := range lines {
+		rest, ok := strings.CutPrefix(line, key+":")
+		if !ok {
+			continue
+		}
+		rest = strings.TrimSpace(rest)
+		if rest == ">" || rest == "|" || rest == ">-" || rest == "|-" || rest == ">+" || rest == "|+" {
+			var b strings.Builder
+			for _, l := range lines[i+1:] {
+				if l != "" && l[0] != ' ' && l[0] != '\t' {
+					break // dedented → next top-level key
+				}
+				b.WriteString(strings.TrimSpace(l))
+				b.WriteByte(' ')
+			}
+			return strings.TrimSpace(b.String())
+		}
+		// Inline scalar — strip a matching pair of surrounding quotes.
+		if len(rest) >= 2 {
+			if (rest[0] == '\'' && rest[len(rest)-1] == '\'') || (rest[0] == '"' && rest[len(rest)-1] == '"') {
+				rest = rest[1 : len(rest)-1]
+			}
+		}
+		return rest
+	}
+	return ""
+}
+
+// classifySkillSource buckets a resolved skill path into the groups
+// /context uses. Empty path → bundled (built-in / in-binary).
+func classifySkillSource(path string) string {
+	if path == "" {
+		return "bundled"
+	}
+	if strings.Contains(path, filepath.Join(".claude", "plugins")) {
+		return "plugin"
+	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" && strings.HasPrefix(path, filepath.Join(home, ".claude")) {
+		return "user"
+	}
+	return "project"
 }
 
 // resolveSkillBody finds the on-disk SKILL.md for a listing name and returns
@@ -285,12 +365,19 @@ func skillCandidatePaths(name string) []string {
 			paths = append(paths, filepath.Join(home, ".claude", "commands", ns, leaf+".md"))
 		}
 	}
-	// Plugin-namespaced: opik:opik → marketplaces/opik/{skills/opik/SKILL.md, commands/opik.md}.
+	// Plugin-namespaced: opik:opik, posthog:querying-posthog-data, etc.
+	// The skill/command file lives in the version the session actually runs,
+	// which installed_plugins.json pins via installPath (the versioned cache
+	// dir). The old marketplaces/<ns>/skills path was wrong — agents/skills
+	// sit under marketplaces/<mp>/plugins/<plugin>/, not marketplaces/<ns>/ —
+	// so every plugin skill fell through to "bundled" with zero tokens.
 	if namespaced && home != "" {
-		paths = append(paths,
-			filepath.Join(home, ".claude", "plugins", "marketplaces", ns, "skills", leaf, "SKILL.md"),
-			filepath.Join(home, ".claude", "plugins", "marketplaces", ns, "commands", leaf+".md"),
-		)
+		if ip := installedPluginPaths(home)[ns]; ip != "" {
+			paths = append(paths,
+				filepath.Join(ip, "skills", leaf, "SKILL.md"),
+				filepath.Join(ip, "commands", leaf+".md"),
+			)
+		}
 	}
 	return paths
 }
