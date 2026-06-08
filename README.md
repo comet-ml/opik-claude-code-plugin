@@ -44,17 +44,11 @@ If you've cloned the repo locally, add it as a marketplace and install from ther
 
 ### Enterprise Install (Managed Settings)
 
-For org-wide deployment, drop a [Claude Code managed-settings.json](https://code.claude.com/docs/en/settings) on every user's machine via your MDM. Managed settings override user/project settings and let an admin enable the plugin, point it at an org-owned Opik workspace, and route every user to their own project automatically.
+For org-wide deployment, push configuration through [Claude Code's server-managed settings](https://code.claude.com/docs/en/server-managed-settings) — Anthropic's admin console delivers the JSON to every authenticated user, no file distribution or MDM required. (Requires Claude for Teams or Enterprise.)
 
-**Path on each platform:**
+**Where to set it up:** in [Claude.ai](https://claude.ai), go to **Admin Settings → Claude Code → Managed settings** and paste the JSON below. Clients pick it up at next startup or within the hourly poll.
 
-| Platform | Path |
-|---|---|
-| macOS | `/Library/Application Support/ClaudeCode/managed-settings.json` |
-| Linux/WSL | `/etc/claude-code/managed-settings.json` |
-| Windows | `C:\Program Files\ClaudeCode\managed-settings.json` |
-
-**Example `managed-settings.json`:**
+**Example managed settings JSON:**
 
 ```json
 {
