@@ -51,7 +51,9 @@ func LoadConfig() (*Config, error) {
 	// SDK. project_name is kept as a fallback for backward compatibility, but it
 	// is shared with the Opik SDK config in ~/.opik.config.
 	if proj := getEnvOrConfig("OPIK_CC_PROJECT", fileConfig, "cc_project_name"); proj != "" {
-		cfg.Project = proj
+		// {field} tokens resolve against Claude's OAuth identity so admins can
+		// route per-user projects (e.g. "cc-{username}") from managed settings.
+		cfg.Project = expandProjectTemplate(proj, loadClaudeIdentity())
 	} else if proj := fileConfig["project_name"]; proj != "" {
 		cfg.Project = proj
 	}
@@ -121,6 +123,12 @@ func getTracingState() tracingState {
 		}
 	}
 
+	// Org-wide enable/disable via managed settings env. Sits between project-
+	// level (explicit per-repo opt-out still wins) and user-level files.
+	if v := os.Getenv("OPIK_CC_TRACING_ENABLED"); v != "" {
+		return tracingState{enabled: strings.EqualFold(v, "true") || v == "1"}
+	}
+
 	// Fall back to a user-level marker so tracing can be enabled for all projects.
 	if homeDir, err := os.UserHomeDir(); err == nil && homeDir != "" {
 		if state, found := checkTracingFile(filepath.Join(homeDir, ".claude", ".opik-tracing-enabled")); found {
@@ -129,4 +137,30 @@ func getTracingState() tracingState {
 	}
 
 	return tracingState{}
+}
+
+// expandProjectTemplate substitutes {field} tokens in the project name from
+// the loaded Claude identity. Unknown tokens are left as-is so misconfigs are
+// visible in Opik instead of silently producing a half-empty name.
+func expandProjectTemplate(template string, id ClaudeIdentity) string {
+	if !strings.ContainsRune(template, '{') {
+		return template
+	}
+	username := id.Email
+	if at := strings.IndexByte(username, '@'); at > 0 {
+		username = username[:at]
+	}
+	replacements := map[string]string{
+		"{email}":        id.Email,
+		"{user_email}":   id.Email,
+		"{username}":     username,
+		"{user_uuid}":    id.UserUUID,
+		"{display_name}": id.DisplayName,
+		"{org_name}":     id.OrgName,
+		"{org_uuid}":     id.OrgUUID,
+	}
+	for token, value := range replacements {
+		template = strings.ReplaceAll(template, token, value)
+	}
+	return template
 }
