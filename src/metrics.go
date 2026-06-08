@@ -171,56 +171,56 @@ func captureCwdAndHead() (cwd, head string) {
 	return
 }
 
-// postTraceMetrics computes git-grounded metrics for the closing trace and
-// merges them into trace.metadata.cc. Feedback scores stay reserved for
-// evaluative judgments — task_class and summary — written by other workers.
+// postTraceMetrics computes per-trace metadata for the closing trace and
+// merges it into trace.metadata.cc. Git-grounded metrics are best-effort —
+// they only land when cwd is inside a git work tree — while the per-domain
+// transcript snapshots (skills, tools, memory, …) always run because they
+// read only the transcript and the user's filesystem, not git.
 func postTraceMetrics(state *State) {
 	cwd := state.Cwd
 	if cwd == "" {
 		cwd = inferCwd()
 	}
-	if cwd == "" {
-		debugLog("postTraceMetrics: no cwd")
-		return
-	}
-	if git(cwd, "rev-parse", "--is-inside-work-tree") != "true" {
-		debugLog("postTraceMetrics: %s is not a git work tree", cwd)
-		return
-	}
 
-	agg := aggregateEdits(state)
+	metrics := map[string]interface{}{}
 
-	repo := repoName(cwd)
-	branch := git(cwd, "branch", "--show-current")
-	// HEAD as of trace close; pairs with state.HeadSHAStart captured at onPrompt.
-	headEnd := git(cwd, "rev-parse", "HEAD")
-	commits, insC, delC := commitsBetween(cwd, state.HeadSHAStart, headEnd)
-	filesU, insU, delU := parseShortstat(git(cwd, "diff", "HEAD", "--shortstat"))
+	var repo, branch string
+	var commits, insC, delC int
+	var agg *EditAggregate
+	if cwd != "" && git(cwd, "rev-parse", "--is-inside-work-tree") == "true" {
+		agg = aggregateEdits(state)
 
-	gitMetrics := map[string]interface{}{
-		"commits_in_trace":  commits,
-		"lines_committed":   insC + delC,
-		"uncommitted_lines": insU + delU,
-		"uncommitted_files": filesU,
-		"files_authored":    len(agg.Files),
-		"lines_authored":    agg.LinesAuthored,
-		"lines_overwritten": agg.LinesOverwritten,
-	}
-	if repo != "" {
-		gitMetrics["repository"] = repo
-	}
-	if branch != "" {
-		gitMetrics["branch"] = branch
-	}
-	if state.HeadSHAStart != "" {
-		gitMetrics["head_sha_start"] = shortSHA(state.HeadSHAStart)
-	}
-	if headEnd != "" {
-		gitMetrics["head_sha_end"] = shortSHA(headEnd)
-	}
+		repo = repoName(cwd)
+		branch = git(cwd, "branch", "--show-current")
+		// HEAD as of trace close; pairs with state.HeadSHAStart captured at onPrompt.
+		headEnd := git(cwd, "rev-parse", "HEAD")
+		commits, insC, delC = commitsBetween(cwd, state.HeadSHAStart, headEnd)
+		filesU, insU, delU := parseShortstat(git(cwd, "diff", "HEAD", "--shortstat"))
 
-	metrics := map[string]interface{}{
-		"git": gitMetrics,
+		gitMetrics := map[string]interface{}{
+			"commits_in_trace":  commits,
+			"lines_committed":   insC + delC,
+			"uncommitted_lines": insU + delU,
+			"uncommitted_files": filesU,
+			"files_authored":    len(agg.Files),
+			"lines_authored":    agg.LinesAuthored,
+			"lines_overwritten": agg.LinesOverwritten,
+		}
+		if repo != "" {
+			gitMetrics["repository"] = repo
+		}
+		if branch != "" {
+			gitMetrics["branch"] = branch
+		}
+		if state.HeadSHAStart != "" {
+			gitMetrics["head_sha_start"] = shortSHA(state.HeadSHAStart)
+		}
+		if headEnd != "" {
+			gitMetrics["head_sha_end"] = shortSHA(headEnd)
+		}
+		metrics["git"] = gitMetrics
+	} else {
+		debugLog("postTraceMetrics: skipping git block (cwd=%q not a git work tree)", cwd)
 	}
 
 	fullEntries, _ := ReadTranscript(state.Transcript, 0)
@@ -231,10 +231,18 @@ func postTraceMetrics(state *State) {
 		}
 	}
 
+	if len(metrics) == 0 {
+		return
+	}
+
 	mergeMetadataCC(state.TraceID, metrics)
 
-	debugLog("metrics %s  repo=%s  branch=%s  commits=%d  +-=%d  uncommitted=%d  files=%d  authored=%d  overwritten=%d",
-		state.TraceID[:8], repo, branch, commits, insC+delC, insU+delU, len(agg.Files), agg.LinesAuthored, agg.LinesOverwritten)
+	var files, authored, overwritten int
+	if agg != nil {
+		files, authored, overwritten = len(agg.Files), agg.LinesAuthored, agg.LinesOverwritten
+	}
+	debugLog("metrics %s  repo=%s  branch=%s  commits=%d  +-=%d  files=%d  authored=%d  overwritten=%d  domains=%d",
+		state.TraceID[:8], repo, branch, commits, insC+delC, files, authored, overwritten, len(metrics))
 }
 
 
