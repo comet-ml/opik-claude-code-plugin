@@ -705,3 +705,68 @@ func extractAssistantTextSnapshot(entries []TranscriptEntry) map[string]interfac
 		},
 	}
 }
+
+// extractOutputTokensSnapshot aggregates attributed output tokens by category
+// at the trace level. This lets the Sankey visualization use
+// sum(metadata.cc.output_tokens.by_category.*) directly without span
+// aggregation. `cc.output_tokens.{summary, by_category}`.
+//
+// Categories:
+//   - thinking         — extended thinking blocks
+//   - assistant_text   — visible text responses
+//   - builtin_tool_use — CC built-in tools (Bash, Read, Edit, …)
+//   - mcp_tool_use     — MCP tool calls (name prefix "mcp__")
+//   - skill_invocations — Skill tool invocations
+//
+// `parsed` should be the dedup-applied output of ParseAssistantMessages +
+// DeduplicateUsage. Pass nil to reparse from entries.
+func extractOutputTokensSnapshot(entries []TranscriptEntry, parsed []ParsedEntry) map[string]interface{} {
+	if parsed == nil {
+		parsed = ParseAssistantMessages(entries)
+		DeduplicateUsage(parsed)
+	}
+
+	var (
+		thinking         int
+		assistantText    int
+		builtinToolUse   int
+		mcpToolUse       int
+		skillInvocations int
+	)
+
+	for _, p := range parsed {
+		tok := p.AttributedOutputTokens
+		switch p.ContentType {
+		case "thinking":
+			thinking += tok
+		case "text":
+			assistantText += tok
+		case "tool_use":
+			switch {
+			case strings.HasPrefix(p.Content.Name, "mcp__"):
+				mcpToolUse += tok
+			case p.Content.Name == "Skill":
+				skillInvocations += tok
+			default:
+				builtinToolUse += tok
+			}
+		}
+	}
+
+	total := thinking + assistantText + builtinToolUse + mcpToolUse + skillInvocations
+	if total == 0 {
+		return nil
+	}
+	return map[string]interface{}{
+		"summary": map[string]interface{}{
+			"total_tokens": total,
+		},
+		"by_category": map[string]interface{}{
+			"thinking":          thinking,
+			"assistant_text":    assistantText,
+			"builtin_tool_use":  builtinToolUse,
+			"mcp_tool_use":      mcpToolUse,
+			"skill_invocations": skillInvocations,
+		},
+	}
+}

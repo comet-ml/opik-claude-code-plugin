@@ -18,7 +18,7 @@ func TestDryRunOnTestThread(t *testing.T) {
 		t.Fatal(err)
 	}
 	snaps := domainSnapshotsFromEntries(entries, entries)
-	for _, domain := range []string{"tools", "skills", "user_prompts", "tool_results", "thinking", "memory", "agents", "cc_builtin", "assistant_text", "prior_assistant", "file_attachments"} {
+	for _, domain := range []string{"tools", "skills", "user_prompts", "tool_results", "thinking", "memory", "agents", "cc_builtin", "assistant_text", "prior_assistant", "file_attachments", "output_tokens"} {
 		fmt.Printf("--- %s ---\n", domain)
 		if snaps[domain] == nil {
 			fmt.Println("(nil)")

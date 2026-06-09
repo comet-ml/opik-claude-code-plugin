@@ -767,6 +767,7 @@ func domainSnapshotsFromEntries(fullEntries, turnEntries []TranscriptEntry) map[
 		"file_attachments": extractFileAttachmentsSnapshot(turnEntries),
 		"prior_assistant":  extractPriorAssistantSnapshot(fullEntries, turnEntries),
 		"assistant_text":   extractAssistantTextSnapshot(turnEntries),
+		"output_tokens":    extractOutputTokensSnapshot(turnEntries, parsedTurn),
 		// cc_builtin covers the bundled system-prompt + tool-catalog cost
 		// /context reports under "System prompt" / "System tools" /
 		// "System tools (deferred)". These never appear in the transcript
