@@ -45,11 +45,24 @@ func uuid7() string {
 		randHex[7:19])
 }
 
-// toV7 converts any UUID to a deterministic UUIDv7 using MD5 hash
-// This enables idempotent upserts by generating consistent IDs from transcript UUIDs
-func toV7(uuid string) string {
-	hash := md5.Sum([]byte(uuid))
+// toV7 builds a deterministic UUIDv7 from an arbitrary key and a millisecond
+// timestamp. The first 48 bits carry tsMillis (so the embedded time matches
+// the entity's start_time and the ID sorts chronologically, like a real v7),
+// while the remaining "random" bits are taken from MD5(key). Deriving the tail
+// from the key keeps IDs deterministic — same key + same tsMillis always yields
+// the same ID — which is what enables idempotent upserts and the duplicate-fire
+// dedup guard in onPrompt.
+//
+// Callers must pass the SAME tsMillis whenever they recompute an ID for a given
+// key (e.g. a parent span referenced from two call sites), or the IDs won't
+// match. In practice the timestamp is always derived from the same immutable
+// transcript entry, so this holds.
+func toV7(key string, tsMillis int64) string {
+	hash := md5.Sum([]byte(key))
 	h := hex.EncodeToString(hash[:])
+
+	// First 48 bits: timestamp (Unix milliseconds).
+	tsHex := fmt.Sprintf("%012x", tsMillis&0xFFFFFFFFFFFF)
 
 	// Set version to 7 (0111) in byte 6
 	b6 := (hash[6] & 0x0F) | 0x70
@@ -60,11 +73,24 @@ func toV7(uuid string) string {
 	b8Hex := fmt.Sprintf("%02x", b8)
 
 	return fmt.Sprintf("%s-%s-%s%s-%s%s-%s",
-		h[0:8],
-		h[8:12],
+		tsHex[0:8],
+		tsHex[8:12],
 		b6Hex,
 		h[14:16],
 		b8Hex,
 		h[18:20],
 		h[20:32])
+}
+
+// millisFromISO parses an ISO-8601 timestamp (as found in Claude Code
+// transcripts and produced by isoNow) into Unix milliseconds. On parse failure
+// it returns 0 — callers embed that into the v7 timestamp field, which is still
+// deterministic for a given input string and so preserves ID stability.
+func millisFromISO(s string) int64 {
+	for _, layout := range []string{time.RFC3339Nano, time.RFC3339} {
+		if t, err := time.Parse(layout, s); err == nil {
+			return t.UnixMilli()
+		}
+	}
+	return 0
 }
