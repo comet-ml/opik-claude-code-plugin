@@ -136,7 +136,10 @@ func onPrompt() {
 	traceID := config.ParentTraceID
 	if traceID == "" {
 		bucket := now / 5
-		traceID = toV7(fmt.Sprintf("trace:%s:%s:%d", input.SessionID, promptHash, bucket))
+		// Embed the bucket-aligned time (ms) so the v7 timestamp matches the
+		// trace's start_time. Bucket alignment keeps both concurrent onPrompt
+		// fires on the same timestamp, preserving the deterministic-ID dedup.
+		traceID = toV7(fmt.Sprintf("trace:%s:%s:%d", input.SessionID, promptHash, bucket), bucket*5*1000)
 	}
 	ts := isoNow()
 
@@ -394,7 +397,20 @@ func onSubagentStop() {
 		}
 	}
 
-	parentSpanID := toV7(parentUUID)
+	// Read the parent transcript up front so we can recover the parent Task
+	// entry's timestamp — toV7 embeds it, so the reference here must use the
+	// same value the parent span ID was built with (see span creation in
+	// processTranscript). Reused below to patch the parent span's output.
+	parentEntries, parentErr := ReadTranscript(input.TranscriptPath, 0)
+	parentMs := int64(0)
+	for _, entry := range parentEntries {
+		if entry.UUID == parentUUID {
+			parentMs = millisFromISO(entry.Timestamp)
+			break
+		}
+	}
+
+	parentSpanID := toV7(parentUUID, parentMs)
 	debugLog("processing subagent with parent=%s", parentSpanID)
 
 	spans := processTranscript(state.TraceID, input.AgentTranscriptPath, 0, parentSpanID)
@@ -408,8 +424,7 @@ func onSubagentStop() {
 	}
 
 	// Patch the parent Task span with output (it was sent before the subagent completed).
-	parentEntries, err := ReadTranscript(input.TranscriptPath, 0)
-	if err == nil {
+	if parentErr == nil {
 		taskResults := BuildTaskResults(parentEntries)
 		for _, entry := range parentEntries {
 			if entry.UUID != parentUUID || entry.Type != "assistant" || entry.Message == nil {
@@ -678,7 +693,7 @@ func processTranscriptEntries(traceID string, entries []TranscriptEntry, parentS
 		}
 
 		span := Span{
-			ID:          toV7(p.UUID),
+			ID:          toV7(p.UUID, millisFromISO(p.Timestamp)),
 			TraceID:     traceID,
 			StartTime:   p.Timestamp,
 			EndTime:     endTime,
