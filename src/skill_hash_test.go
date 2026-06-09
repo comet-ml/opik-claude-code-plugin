@@ -3,8 +3,146 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
+
+func TestParseSkillListingMenu(t *testing.T) {
+	content := strings.Join([]string{
+		"- find-skills: Helps users discover skills.",
+		"- comet:create-jira-ticket: Create Jira Ticket",
+		"- comet:create-pr: Create PR",
+		"- opik:opik: Multi-line description",
+		"continuation line for opik:opik that should stay with its owner",
+		"- run: Last skill",
+	}, "\n")
+	names := []string{"find-skills", "comet:create-jira-ticket", "comet:create-pr", "opik:opik", "run"}
+
+	got := parseSkillListingMenu(content, names)
+
+	// Five distinct owners — no collapsing on the inner `:` of comet:* names.
+	if len(got) != 5 {
+		t.Fatalf("want 5 blocks, got %d: %+v", len(got), keysOf(got))
+	}
+	if !strings.HasPrefix(got["find-skills"], "- find-skills:") {
+		t.Errorf("find-skills block missing leader: %q", got["find-skills"])
+	}
+	// Namespaced skills must keep their full name as the key, not "comet".
+	if _, ok := got["comet"]; ok {
+		t.Errorf("`comet` should not be a top-level key — namespaced skills must stay intact")
+	}
+	if got["comet:create-jira-ticket"] != "- comet:create-jira-ticket: Create Jira Ticket" {
+		t.Errorf("create-jira-ticket block wrong: %q", got["comet:create-jira-ticket"])
+	}
+	// Multi-line description sticks with its opener.
+	if !strings.Contains(got["opik:opik"], "continuation line for opik:opik") {
+		t.Errorf("opik:opik should absorb continuation: %q", got["opik:opik"])
+	}
+	// Continuation didn't leak into the next skill.
+	if strings.Contains(got["run"], "continuation line") {
+		t.Errorf("continuation leaked into `run`: %q", got["run"])
+	}
+}
+
+func TestParseSkillListingMenuTokenizationMatchesContext(t *testing.T) {
+	// Sanity check on the 3.0 chars/token ratio: feed a known block size
+	// and verify tokEstimateAs returns roughly chars/3.0. Locks in the
+	// calibration so a future ratio drift here is caught loudly.
+	block := "- update-config: " + strings.Repeat("x", 720)
+	tok := tokEstimateAs(block, "skill_listing_menu")
+	// 737 chars / 3.0 ≈ 245
+	if tok < 230 || tok > 260 {
+		t.Errorf("expected ~245 tokens for a 737-char block, got %d", tok)
+	}
+}
+
+func keysOf(m map[string]string) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
+}
+
+func TestBuildLoadedSkillBodiesSlashCommand(t *testing.T) {
+	// User types `/opik:opik` → CC injects a `<command-name>` preamble user
+	// message, then a `Base directory for this skill:` follow-up user
+	// message carrying the body. No Skill tool_use is emitted.
+	entries := []TranscriptEntry{
+		{
+			Type: "user", Message: &Message{Content: ContentSlice{
+				{Type: "text", Text: "<command-message>opik:opik</command-message>\n<command-name>/opik:opik</command-name>"},
+			}},
+		},
+		{
+			Type: "user", Message: &Message{Content: ContentSlice{
+				{Type: "text", Text: "Base directory for this skill: /tmp/skills/opik\n\nbody-contents-here"},
+			}},
+		},
+	}
+	loads := buildLoadedSkillBodies(entries)
+	if len(loads) != 1 {
+		t.Fatalf("want 1 slash-command load, got %d: %+v", len(loads), loads)
+	}
+	if loads[0].Name != "opik:opik" {
+		t.Errorf("name = %q, want opik:opik", loads[0].Name)
+	}
+	if !strings.HasPrefix(loads[0].Body, "Base directory") {
+		t.Errorf("body should start with the prefix the model actually sees; got %q", loads[0].Body[:30])
+	}
+	if loads[0].ToolUseID != "" {
+		t.Errorf("slash-command load should have empty ToolUseID, got %q", loads[0].ToolUseID)
+	}
+}
+
+func TestBuildLoadedSkillBodiesIgnoresNonSkillSlashCommands(t *testing.T) {
+	// `/context` is a slash command but not a skill — no "Base directory"
+	// follow-up. Must NOT produce a phantom skill load.
+	entries := []TranscriptEntry{
+		{
+			Type: "user", Message: &Message{Content: ContentSlice{
+				{Type: "text", Text: "<command-name>/context</command-name>"},
+			}},
+		},
+		{
+			Type: "user", Message: &Message{Content: ContentSlice{
+				{Type: "text", Text: "tool_result from /context: usage stats..."},
+			}},
+		},
+	}
+	if loads := buildLoadedSkillBodies(entries); len(loads) != 0 {
+		t.Fatalf("want 0 loads for /context, got %d: %+v", len(loads), loads)
+	}
+}
+
+func TestSkillBodyHashSetCoversBothLoadShapes(t *testing.T) {
+	slashBody := "Base directory for this skill: /tmp/skills/opik\n\nbody"
+	toolBody := "tool-use loaded body text"
+	entries := []TranscriptEntry{
+		// Slash-command load
+		{Type: "user", Message: &Message{Content: ContentSlice{
+			{Type: "text", Text: "<command-name>/opik:opik</command-name>"},
+		}}},
+		{Type: "user", Message: &Message{Content: ContentSlice{
+			{Type: "text", Text: slashBody},
+		}}},
+		// Skill tool_use load
+		{Type: "assistant", Message: &Message{Content: ContentSlice{
+			{Type: "tool_use", ID: "toolu_X", Name: "Skill", Input: map[string]interface{}{"skill": "agent-ops"}},
+		}}},
+		{Type: "user", Message: &Message{Content: ContentSlice{
+			{Type: "tool_result", ToolUseID: "toolu_X", Content: "Launching skill: agent-ops"},
+			{Type: "text", Text: toolBody},
+		}}},
+	}
+	set := skillBodyHashSet(entries)
+	if !set[sha256hex(slashBody)] {
+		t.Error("slash-loaded body should be in the exclusion set")
+	}
+	if !set[sha256hex(toolBody)] {
+		t.Error("tool-use-loaded body should be in the exclusion set")
+	}
+}
 
 // TestExtractSkillEventsAgainstRealTranscript runs the extractor over a real
 // transcript from ~/.claude/projects/-Users-collinc-code-opik/ if present.

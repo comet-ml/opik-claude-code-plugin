@@ -14,6 +14,7 @@ type TranscriptEntry struct {
 	Timestamp     string         `json:"timestamp"`
 	Slug          string         `json:"slug,omitempty"`
 	AITitle       string         `json:"aiTitle,omitempty"` // populated on type:"ai-title" events
+	Version       string         `json:"version,omitempty"` // Claude Code CLI version stamped on every user/assistant entry
 	Message       *Message       `json:"message,omitempty"`
 	ToolUseResult *ToolUseResult `json:"toolUseResult,omitempty"`
 	Attachment    *Attachment    `json:"attachment,omitempty"`
@@ -36,6 +37,11 @@ type Attachment struct {
 	IsInitial         bool            `json:"isInitial,omitempty"`
 	AddedNames        []string        `json:"addedNames,omitempty"`
 	AddedLines        []string        `json:"addedLines,omitempty"`
+	// AddedBlocks carries multi-line text payloads. `mcp_instructions_delta`
+	// uses it for per-server instructions (the always-on context CC injects
+	// for each connected MCP server: capabilities, constraints, etc.). One
+	// block per name, parallel arrays.
+	AddedBlocks       []string        `json:"addedBlocks,omitempty"`
 	RemovedNames      []string        `json:"removedNames,omitempty"`
 	ReaddedNames      []string        `json:"readdedNames,omitempty"`
 	PendingMcpServers []string        `json:"pendingMcpServers,omitempty"`
