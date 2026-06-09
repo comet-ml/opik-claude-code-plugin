@@ -290,62 +290,89 @@ func readInstalledPluginPaths(home string) map[string]string {
 	return out
 }
 
-// extractThinkingSnapshot aggregates thinking-block tokens per model,
-// driven off the SAME per-block attribution that lands on each span's
-// cc.llm_call.attributed_output_tokens. This guarantees that
-// Σ attributed[thinking] over the trace == cc.thinking.summary.total_tokens.
-// `cc.thinking.{summary, by_model}`.
+// extractThinkingSnapshot aggregates thinking-block tokens bucketed by effort
+// level. Level is derived from actual thinking tokens per LLM call (the
+// transcript does not expose the requested budget_tokens).
 //
-// `parsed` should be the dedup-applied output of ParseAssistantMessages +
-// DeduplicateUsage on the turn's entries. Pass nil to reparse (for
-// callers that don't already have a cached slice).
+// Buckets: minimal ≤500, light 501–3 000, medium 3 001–10 000, heavy >10 000.
+//
+// `cc.thinking.{summary, by_level}`.
 func extractThinkingSnapshot(entries []TranscriptEntry, parsed []ParsedEntry) map[string]interface{} {
 	if parsed == nil {
 		parsed = ParseAssistantMessages(entries)
 		DeduplicateUsage(parsed)
 	}
 
-	type group struct {
-		tokens, blockCount int
-	}
-	byModel := map[string]*group{}
-	totalTokens, totalBlocks := 0, 0
-
+	// Sum thinking tokens per LLM call (MessageID).
+	callThinking := map[string]int{}
+	anonTokens := 0
 	for _, p := range parsed {
 		if p.ContentType != "thinking" {
 			continue
 		}
-		g, ok := byModel[p.Model]
-		if !ok {
-			g = &group{}
-			byModel[p.Model] = g
+		if p.MessageID == "" {
+			anonTokens += p.AttributedOutputTokens
+			continue
 		}
-		g.tokens += p.AttributedOutputTokens
-		g.blockCount++
-		totalTokens += p.AttributedOutputTokens
-		totalBlocks++
+		callThinking[p.MessageID] += p.AttributedOutputTokens
 	}
-	if totalBlocks == 0 {
+	if anonTokens > 0 {
+		callThinking["__anon"] = anonTokens
+	}
+	if len(callThinking) == 0 {
 		return nil
 	}
 
-	byModelOut := make([]map[string]interface{}, 0, len(byModel))
-	for m, g := range byModel {
-		byModelOut = append(byModelOut, map[string]interface{}{
-			"model":       m,
-			"tokens":      g.tokens,
-			"block_count": g.blockCount,
+	type levelGroup struct{ calls, tokens int }
+	byLevel := map[string]*levelGroup{}
+	totalTokens, totalCalls := 0, 0
+
+	for _, tok := range callThinking {
+		l := thinkingLevel(tok)
+		g, ok := byLevel[l]
+		if !ok {
+			g = &levelGroup{}
+			byLevel[l] = g
+		}
+		g.calls++
+		g.tokens += tok
+		totalTokens += tok
+		totalCalls++
+	}
+
+	order := []string{"minimal", "light", "medium", "heavy"}
+	byLevelOut := make([]map[string]interface{}, 0, len(byLevel))
+	for _, l := range order {
+		g, ok := byLevel[l]
+		if !ok {
+			continue
+		}
+		byLevelOut = append(byLevelOut, map[string]interface{}{
+			"level":      l,
+			"tokens":     g.tokens,
+			"call_count": g.calls,
 		})
 	}
-	sort.Slice(byModelOut, func(i, j int) bool {
-		return byModelOut[i]["tokens"].(int) > byModelOut[j]["tokens"].(int)
-	})
+
 	return map[string]interface{}{
 		"summary": map[string]interface{}{
 			"total_tokens": totalTokens,
-			"block_count":  totalBlocks,
+			"call_count":   totalCalls,
 		},
-		"by_model": byModelOut,
+		"by_level": byLevelOut,
+	}
+}
+
+func thinkingLevel(tokens int) string {
+	switch {
+	case tokens > 10000:
+		return "heavy"
+	case tokens > 3000:
+		return "medium"
+	case tokens > 500:
+		return "light"
+	default:
+		return "minimal"
 	}
 }
 
@@ -597,11 +624,13 @@ func promptBucket(tokens int) string {
 }
 
 // extractFileAttachmentsSnapshot returns @-mentioned + system-injected file
-// attachments this turn. Skill bodies are NOT here — they go under
-// cc.skills.loaded. `cc.file_attachments.{summary, files}`.
+// attachments this turn grouped by file extension. Skill bodies are NOT here —
+// they go under cc.skills.loaded. `cc.file_attachments.{summary, by_type}`.
 func extractFileAttachmentsSnapshot(entries []TranscriptEntry) map[string]interface{} {
-	files := []map[string]interface{}{}
-	total := 0
+	type group struct{ tokens, count int }
+	byExt := map[string]*group{}
+	total, fileCount := 0, 0
+
 	for _, e := range entries {
 		if e.Type != "attachment" || e.Attachment == nil {
 			continue
@@ -609,9 +638,6 @@ func extractFileAttachmentsSnapshot(entries []TranscriptEntry) map[string]interf
 		if e.Attachment.Type != "file" {
 			continue
 		}
-		// File attachment shape: attachment.content is a JSON object with
-		// a nested file.content string. The struct treats Content as
-		// RawMessage so we decode lazily here.
 		var wrapper struct {
 			File struct {
 				Path    string `json:"path,omitempty"`
@@ -621,26 +647,46 @@ func extractFileAttachmentsSnapshot(entries []TranscriptEntry) map[string]interf
 		if err := json.Unmarshal(e.Attachment.Content, &wrapper); err != nil {
 			continue
 		}
-		body := wrapper.File.Content
-		// Auto-detect — file attachments vary (source code, markdown, JSON, …).
-		tokens := tokEstimate(body)
-		files = append(files, map[string]interface{}{
-			"path":         wrapper.File.Path,
-			"sha256":       sha256hex(body),
-			"body_tokens":  tokens,
-			"content_type": "source", // bucket classification deferred — single bucket for now
-		})
+		tokens := tokEstimate(wrapper.File.Content)
+
+		ext := strings.ToLower(filepath.Ext(wrapper.File.Path))
+		if ext == "" {
+			ext = "other"
+		}
+
+		g, ok := byExt[ext]
+		if !ok {
+			g = &group{}
+			byExt[ext] = g
+		}
+		g.tokens += tokens
+		g.count++
 		total += tokens
+		fileCount++
 	}
-	if len(files) == 0 {
+
+	if fileCount == 0 {
 		return nil
 	}
+
+	byTypeOut := make([]map[string]interface{}, 0, len(byExt))
+	for ext, g := range byExt {
+		byTypeOut = append(byTypeOut, map[string]interface{}{
+			"ext":        ext,
+			"tokens":     g.tokens,
+			"file_count": g.count,
+		})
+	}
+	sort.Slice(byTypeOut, func(i, j int) bool {
+		return byTypeOut[i]["tokens"].(int) > byTypeOut[j]["tokens"].(int)
+	})
+
 	return map[string]interface{}{
 		"summary": map[string]interface{}{
 			"total_tokens": total,
-			"file_count":   len(files),
+			"file_count":   fileCount,
 		},
-		"files": files,
+		"by_type": byTypeOut,
 	}
 }
 
