@@ -68,6 +68,10 @@ func BuildSkillsSnapshot(allEntries []TranscriptEntry) map[string]interface{} {
 		if s.Path != "" {
 			e["path"] = s.Path
 		}
+		if s.CatalogBodyTokens > 0 {
+			e["catalog_body_tokens"] = s.CatalogBodyTokens
+			e["catalog_source"] = s.CatalogSource
+		}
 		loadedOut = append(loadedOut, e)
 	}
 
@@ -109,9 +113,20 @@ func tokEstimate(s string) int {
 //	"json"                    →  2.8  (tool_use input, MCP payload)
 //	"deferred_tools_payload"  →  2.5  (pure JSON list of names)
 //	"tool_result"             →  3.0  (mixed text + JSON-ish output)
+//	"skill_listing_menu"      →  3.0  (per-skill `- name: description` block —
+//	                                  derived from /context's published
+//	                                  per-skill tokens against the actual
+//	                                  attachment text: 6368 chars / 2116 tokens)
+//	"agent_frontmatter"       →  3.1  (YAML name/desc + example blocks; verified
+//	                                  vs /context's "Custom agents" rows)
 //	"skill_body"              →  3.5  (markdown w/ code blocks)
+//	"memory_file"             →  2.4  (.claude/rules/**/*.md + auto-mem MEMORY.md;
+//	                                  derived from /context's "Memory files"
+//	                                  rows — denser than skill bodies because
+//	                                  these files lean on brackets/dashes/code
+//	                                  conventions that tokenize as separate
+//	                                  short tokens)
 //	"assistant_text"          →  3.9  (prose with occasional code)
-//	"skill_listing_menu"      →  3.9  (name + short description lines)
 //	"prose"                   →  3.9
 //	"user_prompt"             →  4.3  (natural English from a user)
 //	"" / unknown              →  3.6  (overall calibrated median)
@@ -148,11 +163,15 @@ func charsPerToken(s, contentType string) float64 {
 		return 2.8
 	case "deferred_tools_payload":
 		return 2.5
-	case "tool_result":
+	case "memory_file":
+		return 2.4
+	case "tool_result", "skill_listing_menu":
 		return 3.0
+	case "agent_frontmatter":
+		return 3.1
 	case "skill_body":
 		return 3.5
-	case "assistant_text", "prose", "skill_listing_menu":
+	case "assistant_text", "prose":
 		return 3.9
 	case "user_prompt":
 		return 4.3

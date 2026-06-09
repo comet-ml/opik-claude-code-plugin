@@ -36,6 +36,30 @@ var (
 )
 
 func main() {
+	// OPIK_CC_SKIP is the recursion guard: it's set on the env we hand to
+	// any sub-claude we spawn (e.g. the /context capture fork), so when CC
+	// fires its UserPromptSubmit / Stop / SessionEnd hooks inside that
+	// fork they all short-circuit here. Without this, fetchRuntimeContext
+	// would infinitely re-enter itself.
+	if os.Getenv("OPIK_CC_SKIP") == "1" {
+		os.Exit(0)
+	}
+
+	// Detached context-fetch mode: a previous invocation forked us as a
+	// background subprocess to ask claude `/context` and PATCH the result
+	// onto the trace. This path never reads stdin; it shells out to claude
+	// and exits.
+	if os.Getenv("OPIK_CC_CONTEXT_FETCH") == "1" {
+		var err error
+		config, err = LoadConfig()
+		if err != nil || config == nil {
+			os.Exit(0)
+		}
+		api = NewAPI(config)
+		runContextFetchMode()
+		os.Exit(0)
+	}
+
 	var err error
 	config, err = LoadConfig()
 	if err != nil {
@@ -195,6 +219,16 @@ func onStop() {
 
 	if err := api.Patch("/traces/"+state.TraceID, finalUpdate); err != nil {
 		debugLog("update trace: %v", err)
+	}
+
+	// Fire-and-forget: detach a child process to ask `claude /context` for
+	// the trace's actual numbers and PATCH them onto metadata.cc.context_runtime.
+	// Adds ~1s of work, but it runs in the background — this hook returns
+	// immediately, claude continues, and the trace gets the exact figures
+	// shortly after. Failures are logged and ignored so a misconfigured
+	// claude binary can't break tracing.
+	if err := spawnDetachedContextFetch(state.SessionID, state.TraceID, state.Cwd); err != nil {
+		debugLog("spawn context fetch: %v", err)
 	}
 
 	debugLog("done")
@@ -555,6 +589,23 @@ func flush(state *State) {
 		return
 	}
 
+	// Stamp every LLM span (those that carry usage data — one per LLM
+	// call after DeduplicateUsage moves the anchor to the first block of
+	// each message_id group) with a snapshot of the request-context
+	// breakdown by category. Lets cost dashboards attribute per-span
+	// billed tokens to categories with a single-row query, no JOIN back
+	// to trace.cc.context_runtime. See context_snapshot.go for the
+	// accuracy tradeoff.
+	if snapshot := buildContextSnapshot(state); snapshot != nil {
+		for i := range spans {
+			if spans[i].Usage == nil {
+				continue
+			}
+			cc := ensureCCMap(&spans[i])
+			cc["context_snapshot"] = snapshot
+		}
+	}
+
 	debugLog("flush: %d spans", len(spans))
 	if err := api.Post("/spans/batch", SpanBatch{Spans: spans}); err != nil {
 		debugLog("send spans: %v", err)
@@ -701,6 +752,13 @@ func domainSnapshotsFromEntries(fullEntries, turnEntries []TranscriptEntry) map[
 		"file_attachments": extractFileAttachmentsSnapshot(turnEntries),
 		"prior_assistant":  extractPriorAssistantSnapshot(fullEntries, turnEntries),
 		"assistant_text":   extractAssistantTextSnapshot(turnEntries),
+		// cc_builtin covers the bundled system-prompt + tool-catalog cost
+		// /context reports under "System prompt" / "System tools" /
+		// "System tools (deferred)". These never appear in the transcript
+		// (the binary holds the schemas internally), so values are
+		// version-keyed approximations — marked `estimated: true` in the
+		// payload so the FE can render them as such.
+		"cc_builtin":       extractCCBuiltinSnapshot(fullEntries),
 	}
 }
 

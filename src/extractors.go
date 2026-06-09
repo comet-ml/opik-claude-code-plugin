@@ -70,10 +70,13 @@ func extractMemorySnapshot() map[string]interface{} {
 			continue
 		}
 		s := string(body)
-		// Memory/rule files are markdown with code blocks, tables, and
-		// frontmatter — denser than plain prose, so skill_body (3.5) tracks
-		// /context closer than prose (3.9) would.
-		tokens := tokEstimateAs(s, "skill_body")
+		// memory_file (2.4) — these are .claude/rules/**/*.md plus the
+		// auto-memory MEMORY.md index. They lean heavily on brackets,
+		// dashes, short headings, and code conventions, all of which
+		// tokenize as separate short tokens — denser than a skill body
+		// (3.5) or prose (3.9). Calibrated against /context's "Memory
+		// files" rows across 7 rule files (mean 2.37 chars/token).
+		tokens := tokEstimateAs(s, "memory_file")
 		files = append(files, map[string]interface{}{
 			"path":        p,
 			"sha256":      sha256hex(s),
@@ -112,9 +115,10 @@ func extractAgentsSnapshot() map[string]interface{} {
 	cwd := inferCwd()
 
 	type agentFile struct {
-		path   string
-		name   string // display name; plugin agents are namespaced <plugin>:<agent>
-		source string
+		path     string
+		basename string // filename without .md — fallback name
+		nsPrefix string // "<plugin>:" for plugin agents, "" for project/user
+		source   string
 	}
 	files := []agentFile{}
 
@@ -122,7 +126,7 @@ func extractAgentsSnapshot() map[string]interface{} {
 		matches, _ := filepath.Glob(filepath.Join(dir, "*.md"))
 		sort.Strings(matches)
 		for _, p := range matches {
-			files = append(files, agentFile{p, prefix + strings.TrimSuffix(filepath.Base(p), ".md"), source})
+			files = append(files, agentFile{p, strings.TrimSuffix(filepath.Base(p), ".md"), prefix, source})
 		}
 	}
 
@@ -131,8 +135,16 @@ func extractAgentsSnapshot() map[string]interface{} {
 	}
 	if home != "" {
 		addDir(filepath.Join(home, ".claude", "agents"), "user", "")
-		// Plugin agents from the version the session actually runs.
+		// Plugin agents only from *enabled* plugins. The
+		// installed_plugins.json manifest lists every install on disk;
+		// `enabledPlugins` from the layered settings files decides which
+		// actually load. Including disabled plugins (e.g. plugin-dev) was
+		// producing ghost rows /context never shows.
+		enabled := enabledPluginNames(home, cwd)
 		for plugin, installPath := range installedPluginPaths(home) {
+			if !enabled[plugin] {
+				continue
+			}
 			addDir(filepath.Join(installPath, "agents"), "plugin", plugin+":")
 		}
 	}
@@ -162,9 +174,17 @@ func extractAgentsSnapshot() map[string]interface{} {
 		if meta == "" {
 			meta = s
 		}
-		tokens := tokEstimateAs(meta, "skill_body")
+		// The display name in /context comes from the YAML `name:` field,
+		// NOT the filename (e.g. meta-auditor.md exposes itself as
+		// `config-auditor`). Falling back to the basename keeps
+		// frontmatter-less files identifiable.
+		displayName := frontmatterField(meta, "name")
+		if displayName == "" {
+			displayName = f.basename
+		}
+		tokens := tokEstimateAs(meta, "agent_frontmatter")
 		agents = append(agents, map[string]interface{}{
-			"name":        f.name,
+			"name":        f.nsPrefix + displayName,
 			"path":        f.path,
 			"source":      f.source,
 			"sha256":      sha256hex(s),
@@ -219,16 +239,27 @@ func frontmatter(s string) string {
 // user + project scope), the last one wins — scope precedence is not
 // modeled, and duplicate agent files are de-duped by path downstream.
 //
-// Memoized: skill resolution calls this once per available skill (100+/turn),
-// and the manifest doesn't change within a turn.
+// Memoized per-home: skill resolution calls this once per available skill
+// (100+/turn) and the manifest doesn't change within a turn. Keying on
+// `home` (not a bare sync.Once) keeps tests deterministic when each
+// subtest points HOME at a fresh tmp dir.
 var (
-	pluginPathsOnce sync.Once
-	pluginPathsMemo map[string]string
+	pluginPathsMu   sync.Mutex
+	pluginPathsMemo map[string]map[string]string
 )
 
 func installedPluginPaths(home string) map[string]string {
-	pluginPathsOnce.Do(func() { pluginPathsMemo = readInstalledPluginPaths(home) })
-	return pluginPathsMemo
+	pluginPathsMu.Lock()
+	defer pluginPathsMu.Unlock()
+	if pluginPathsMemo == nil {
+		pluginPathsMemo = map[string]map[string]string{}
+	}
+	if v, ok := pluginPathsMemo[home]; ok {
+		return v
+	}
+	v := readInstalledPluginPaths(home)
+	pluginPathsMemo[home] = v
+	return v
 }
 
 func readInstalledPluginPaths(home string) map[string]string {
@@ -535,15 +566,18 @@ func extractUserPromptsSnapshot(entries []TranscriptEntry) map[string]interface{
 }
 
 // skillBodyHashSet returns the set of sha256 hashes of every skill body
-// loaded this session. Comparing by hash (rather than the raw string) is
-// safer against pathological cases where a user prompt happens to equal
-// a small skill body — collisions on sha256 are vanishingly unlikely.
+// loaded this session — across both Skill-tool-use loads and slash-command
+// loads. Comparing by hash (rather than the raw string) is safer against
+// pathological cases where a user prompt happens to equal a small skill
+// body; collisions on sha256 are vanishingly unlikely. Excluding both
+// shapes is what keeps user_prompts from double-counting an injected
+// skill body sitting alongside the actual user prompt.
 func skillBodyHashSet(entries []TranscriptEntry) map[string]bool {
-	bodies := buildSkillBodyMap(entries)
-	out := make(map[string]bool, len(bodies))
-	for _, body := range bodies {
-		if body != "" {
-			out[sha256hex(body)] = true
+	loads := buildLoadedSkillBodies(entries)
+	out := make(map[string]bool, len(loads))
+	for _, l := range loads {
+		if l.Body != "" {
+			out[sha256hex(l.Body)] = true
 		}
 	}
 	return out
