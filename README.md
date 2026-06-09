@@ -42,6 +42,62 @@ If you've cloned the repo locally, add it as a marketplace and install from ther
 
 **Important:** Restart any running Claude Code sessions after installation. Hooks only load when a session starts.
 
+### Enterprise Install (Managed Settings)
+
+For org-wide deployment, push configuration through [Claude Code's server-managed settings](https://code.claude.com/docs/en/server-managed-settings) — Anthropic's admin console delivers the JSON to every authenticated user, no file distribution or MDM required. (Requires Claude for Teams or Enterprise.)
+
+**Where to set it up:** in [Claude.ai](https://claude.ai), go to **Admin Settings → Claude Code → Managed settings** and paste the JSON below. Clients pick it up at next startup or within the hourly poll.
+
+**Example managed settings JSON:**
+
+```json
+{
+  "extraKnownMarketplaces": {
+    "opik": {
+      "source": {"source": "github", "repo": "comet-ml/opik-claude-code-plugin"},
+      "autoUpdate": true
+    }
+  },
+  "enabledPlugins": {
+    "opik@opik": true
+  },
+  "env": {
+    "OPIK_CC_TRACING_ENABLED": "true",
+    "OPIK_BASE_URL": "https://www.comet.com/opik/api",
+    "OPIK_CC_WORKSPACE": "your-org-cc-workspace",
+    "OPIK_API_KEY": "<workspace-scoped API key>",
+    "OPIK_CC_PROJECT": "cc-{username}"
+  },
+  "forceRemoteSettingsRefresh": true,
+  "showThinkingSummaries": true
+}
+```
+
+What each piece does:
+
+- `extraKnownMarketplaces` + `enabledPlugins` — registers the marketplace and force-enables the plugin for every user. Users see it as **managed** and can't disable it.
+- `OPIK_CC_TRACING_ENABLED=true` — turns tracing on for every session without users dropping per-project files. Individual projects can still opt out by writing `off` to `.claude/.opik-tracing-enabled`.
+- `OPIK_CC_WORKSPACE` — sends Claude Code traces to a dedicated workspace, isolated from any user's personal Opik work in `~/.opik.config`.
+- `OPIK_API_KEY` — the workspace-scoped key the hook uses to write traces. Treat this file as sensitive; the API key is shared with every machine it's deployed to. Provision a key with the minimum write scope on the CC workspace.
+- `OPIK_CC_PROJECT` — supports `{field}` tokens that expand from the user's Claude Code OAuth identity (read from `~/.claude.json`). So one config string routes every user to their own project.
+- `forceRemoteSettingsRefresh: true` — fail-closed startup: blocks the CLI at launch until fresh managed settings are fetched from Anthropic, so the brief unenforced window on first launch can't leak unmonitored sessions. Requires connectivity to `api.anthropic.com`.
+- `showThinkingSummaries: true` — surfaces extended-thinking summaries in the user's transcript so the same reasoning that gets traced to Opik is visible to the user locally. Optional but useful when you want what's logged to match what users see.
+
+**Available `{field}` tokens:**
+
+| Token | Resolves to |
+|---|---|
+| `{username}` | local-part of email (before `@`) — e.g. `collinc` |
+| `{email}` / `{user_email}` | full email — e.g. `collinc@comet.com` |
+| `{user_uuid}` | Anthropic account UUID |
+| `{display_name}` | OAuth display name |
+| `{org_name}` | Anthropic organization name |
+| `{org_uuid}` | Anthropic organization UUID |
+
+Unknown tokens pass through literally so misconfigurations are visible in Opik rather than silently producing empty project names.
+
+Per-trace identity (`cc.identity.user_email`, `cc.identity.user_uuid`, `cc.identity.org_uuid`, etc.) is also attached to every trace's metadata regardless of project name, plus a `user:<email>` tag, so admins can filter/group across users in a shared project too.
+
 ## Configuration
 
 Run the Opik CLI to configure your connection:
@@ -56,7 +112,8 @@ This creates `~/.opik.config` with your API URL, key, and workspace.
 ### Optional Environment Variables
 
 ```bash
-export OPIK_CC_PROJECT="my-project"         # Project name (default: claude-code)
+export OPIK_CC_TRACING_ENABLED="true"       # Org-wide enable, useful from managed settings
+export OPIK_CC_PROJECT="my-project"         # Project name (default: claude-code); supports {field} tokens — see Enterprise Install
 export OPIK_CC_WORKSPACE="my-workspace"     # Workspace override (default: OPIK_WORKSPACE / ~/.opik.config)
 export OPIK_CC_TRUNCATE_FIELDS="false"      # Don't truncate large fields
 ```
