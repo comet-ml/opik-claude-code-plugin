@@ -254,19 +254,28 @@ CLAUDE.md / MEMORY.md / `.agents/` files loaded at session start.
 
 ## `cc.thinking` schema
 
-Per-turn aggregate of thinking blocks, grouped by model. (`effort` isn't
-in the transcript — left out until we add a SessionStart capture.)
+Per-turn aggregate of thinking tokens bucketed by effort level. Level is
+inferred from actual tokens per LLM call — the transcript does not expose
+the requested `budget_tokens`.
+
+| Level | Thinking tokens per call |
+|-------|--------------------------|
+| `minimal` | ≤ 500 |
+| `light` | 501 – 3 000 |
+| `medium` | 3 001 – 10 000 |
+| `heavy` | > 10 000 |
 
 ```jsonc
 "cc": {
   "thinking": {
     "summary": {
       "total_tokens": 9230,
-      "block_count":  18
+      "call_count":   5
     },
-    "by_model": [
-      { "model": "claude-opus-4-7",   "tokens": 8100, "block_count": 14 },
-      { "model": "claude-haiku-4-5",  "tokens": 1130, "block_count":  4 }
+    "by_level": [
+      { "level": "minimal", "tokens":  130, "call_count": 2 },
+      { "level": "light",   "tokens": 1000, "call_count": 1 },
+      { "level": "heavy",   "tokens": 8100, "call_count": 2 }
     ]
   }
 }
@@ -326,7 +335,7 @@ turn-level lane total.
 
 ## `cc.file_attachments` schema
 
-@-mentioned files and system-injected attachments (excluding skill bodies — those go under `cc.skills.loaded`).
+@-mentioned files and system-injected attachments (excluding skill bodies — those go under `cc.skills.loaded`), grouped by file extension.
 
 ```jsonc
 "cc": {
@@ -335,14 +344,10 @@ turn-level lane total.
       "total_tokens": 12400,
       "file_count":   4
     },
-    "files": [
-      {
-        "path":         "/Users/collinc/code/opik/apps/opik-frontend/src/v2/router.tsx",
-        "sha256":       "1234abcd…",
-        "body_tokens":  8200,
-        "content_type": "source"   // source | log | image | pdf | csv | other
-      }
-      // …
+    "by_type": [
+      { "ext": ".tsx",  "tokens": 8200, "file_count": 1 },
+      { "ext": ".md",   "tokens": 3100, "file_count": 2 },
+      { "ext": "other", "tokens": 1100, "file_count": 1 }  // no extension
     ]
   }
 }
