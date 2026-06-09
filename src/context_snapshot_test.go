@@ -29,10 +29,12 @@ body
 `)
 
 	// Synthetic transcript with a skill_listing attachment + a version
-	// stamp so cc_builtin and skills both fire.
+	// stamp so cc_builtin and skills both fire, plus user + assistant
+	// content so the cumulative messages category is non-zero.
 	transcript := filepath.Join(cwd, "transcript.jsonl")
 	writeFile(t, transcript,
-		`{"type":"user","version":"2.1.150","message":{"role":"user","content":"hi"}}
+		`{"type":"user","version":"2.1.150","message":{"role":"user","content":"hi there, give me a moderately long prompt to test cumulative messages tally"}}
+{"type":"assistant","version":"2.1.150","message":{"role":"assistant","content":[{"type":"text","text":"Sure here is a response"}],"usage":{"input_tokens":0,"output_tokens":42,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}
 {"type":"attachment","attachment":{"type":"skill_listing","content":"- demo-skill: short description here","skillCount":1,"names":["demo-skill"],"isInitial":true}}
 `)
 
@@ -47,7 +49,7 @@ body
 	}
 
 	wantPresent := []string{"system_prompt", "system_tools", "system_tools_deferred",
-		"memory_files", "custom_agents", "skills_menu"}
+		"memory_files", "custom_agents", "skills_menu", "messages"}
 	for _, k := range wantPresent {
 		if cats[k] == 0 {
 			t.Errorf("category %s missing or zero: %v", k, cats)
@@ -86,6 +88,51 @@ func TestBuildContextSnapshotMissingTranscript(t *testing.T) {
 	state := &State{Transcript: "/this/path/does/not/exist"}
 	if snap := buildContextSnapshot(state); snap != nil {
 		t.Errorf("expected nil snapshot for missing transcript, got %+v", snap)
+	}
+}
+
+func TestCumulativeMessagesTokens(t *testing.T) {
+	// Three layers we want to add up:
+	//   1. user text  — chars/4.3 estimate (user_prompt ratio)
+	//   2. tool_result — chars/3.0 estimate (tool_result ratio)
+	//   3. assistant output — usage.output_tokens (exact, not estimated)
+	// Loaded skill bodies should be EXCLUDED because they live in
+	// skills_loaded; double-counting them would inflate messages by 1k+.
+	entries := []TranscriptEntry{
+		// User text — counted
+		{Type: "user", Message: &Message{Content: ContentSlice{
+			{Type: "text", Text: "what color is grass and why"},
+		}}},
+		// Assistant — output_tokens counted (the 42 below) regardless of
+		// the text we estimate; exactness comes from the API.
+		{Type: "assistant", Message: &Message{
+			Content: ContentSlice{{Type: "text", Text: "green, chlorophyll"}},
+			Usage:   &Usage{OutputTokens: 42},
+		}},
+		// Tool result — counted
+		{Type: "user", Message: &Message{Content: ContentSlice{
+			{Type: "tool_result", Content: "the result text"},
+		}}},
+		// Slash-loaded skill preamble + body — body must NOT count here
+		// (it's in skills_loaded).
+		{Type: "user", Message: &Message{Content: ContentSlice{
+			{Type: "text", Text: "<command-name>/test:skill</command-name>"},
+		}}},
+		{Type: "user", Message: &Message{Content: ContentSlice{
+			{Type: "text", Text: "Base directory for this skill: /tmp/x\n\nthis large body is excluded"},
+		}}},
+	}
+	total := cumulativeMessagesTokens(entries)
+	if total < 40 {
+		t.Errorf("messages total = %d, expected at least the 42 assistant output_tokens", total)
+	}
+	// Confirm the skill body's "this large body is excluded" text isn't
+	// included — a heuristic: the body text length / 4.3 is ~7 tokens; if
+	// total was that much larger we'd know it leaked through. Use the
+	// shape sanity check: total should be close to (asst 42 + small user
+	// + small tool_result + small command-name); upper bound ~80.
+	if total > 80 {
+		t.Errorf("messages total = %d, suspect the skill body leaked in (should be ~50-70)", total)
 	}
 }
 

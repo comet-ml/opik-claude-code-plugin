@@ -102,6 +102,16 @@ func buildContextSnapshot(state *State) map[string]interface{} {
 		}
 	}
 
+	// Messages — cumulative conversation content across the whole session
+	// (every prior user turn, every prior assistant turn, every tool_result).
+	// Without this, the per-span snapshot's total under-states API billing
+	// for long sessions: the always-on categories are flat per turn but
+	// `messages` grows linearly with conversation length, and a 50-turn
+	// session can accumulate thousands of tokens here. Loaded skill bodies
+	// are excluded from this category because they're already in
+	// skills_loaded — adding both would double-count.
+	addCat("messages", cumulativeMessagesTokens(fullEntries))
+
 	if len(cats) == 0 {
 		return nil
 	}
@@ -125,4 +135,54 @@ func buildContextSnapshot(state *State) map[string]interface{} {
 		"deferred_tokens":  deferred, // ← informational; loaded on demand
 		"source":           "estimated_sync",
 	}
+}
+
+// cumulativeMessagesTokens sums every piece of conversation content from
+// the session-so-far transcript: user text (minus loaded skill bodies),
+// tool results, and prior assistant output. Mirrors what /context counts
+// under its "Messages" row.
+//
+// Assistant output uses the actual `usage.output_tokens` because
+// Anthropic counted them — more accurate than re-estimating via
+// tokEstimateAs on text + thinking + tool_use bodies. User and tool_result
+// fall back to our calibrated estimates.
+//
+// Loaded skill bodies are tracked in cats["skills_loaded"] above and
+// excluded here so the two categories sum to the right total when both
+// are present. Without that split, /opik:opik would double-count the
+// 1000+ token skill body in both buckets.
+func cumulativeMessagesTokens(entries []TranscriptEntry) int {
+	if len(entries) == 0 {
+		return 0
+	}
+	skillBodies := skillBodyHashSet(entries)
+
+	total := 0
+	for _, e := range entries {
+		switch e.Type {
+		case "user":
+			if e.Message == nil {
+				continue
+			}
+			for _, c := range e.Message.Content {
+				switch c.Type {
+				case "text":
+					if skillBodies[sha256hex(c.Text)] {
+						continue // counted under skills_loaded
+					}
+					total += tokEstimateAs(c.Text, "user_prompt")
+				case "tool_result":
+					total += resultTokens(c.Content)
+				}
+			}
+		case "assistant":
+			if e.Message == nil || e.Message.Usage == nil {
+				continue
+			}
+			// Anthropic's own count for this LLM call's output —
+			// exact, no estimation drift.
+			total += e.Message.Usage.OutputTokens
+		}
+	}
+	return total
 }
