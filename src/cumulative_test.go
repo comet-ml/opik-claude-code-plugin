@@ -55,8 +55,8 @@ func TestBillingNoUsageDoubleCountAcrossMultiBlockEntries(t *testing.T) {
 	if totals["output"].(int) != 1000 {
 		t.Errorf("output total = %d, want 1000 booked once", totals["output"])
 	}
-	if totals["fresh"].(int) != 100 {
-		t.Errorf("fresh total = %d, want 100 booked once", totals["fresh"])
+	if totals["input"].(int) != 100 {
+		t.Errorf("fresh total = %d, want 100 booked once", totals["input"])
 	}
 }
 

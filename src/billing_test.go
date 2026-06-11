@@ -14,7 +14,7 @@ func billingColumnSums(snap map[string]interface{}) (read, write, fresh, output,
 		row := v.(map[string]interface{})
 		read += row["cache_read"].(int)
 		write += row["cache_creation"].(int)
-		fresh += row["fresh"].(int)
+		fresh += row["input"].(int)
 		output += row["output"].(int)
 		rows++
 	}
@@ -73,7 +73,7 @@ func TestBillingSumsExactlyToUsage(t *testing.T) {
 
 	totals := snap["totals"].(map[string]interface{})
 	if totals["cache_read"].(int) != wantRead || totals["cache_creation"].(int) != wantWrite ||
-		totals["fresh"].(int) != wantFresh || totals["output"].(int) != wantOut {
+		totals["input"].(int) != wantFresh || totals["output"].(int) != wantOut {
 		t.Errorf("totals = %v, want read=%d write=%d fresh=%d output=%d",
 			totals, wantRead, wantWrite, wantFresh, wantOut)
 	}
@@ -128,8 +128,8 @@ func TestBillingPositionalCutMovesContentToCacheRead(t *testing.T) {
 	}
 	// Fresh: prompt 1 billed cold on call 1, prompt 2 billed in call 2's tail.
 	wantFresh := pTok + tokEstimateAs("and?", "user_prompt")
-	if up["fresh"].(int) != wantFresh {
-		t.Errorf("user_prompts fresh = %d, want %d", up["fresh"], wantFresh)
+	if up["input"].(int) != wantFresh {
+		t.Errorf("user_prompts fresh = %d, want %d", up["input"], wantFresh)
 	}
 	if up["cache_read"].(int) != pTok {
 		t.Errorf("user_prompts cache_read = %d, want %d (call 2 replay)", up["cache_read"], pTok)
@@ -162,8 +162,8 @@ func TestBillingUnattributedAbsorbsUnknownMass(t *testing.T) {
 	if !ok {
 		t.Fatal("expected an unattributed lane entry")
 	}
-	if row["fresh"].(int) != 5_000 {
-		t.Errorf("unattributed fresh = %d, want 5000", row["fresh"])
+	if row["input"].(int) != 5_000 {
+		t.Errorf("unattributed fresh = %d, want 5000", row["input"])
 	}
 	if row["total"].(int) != 5_000 {
 		t.Errorf("unattributed total = %d, want 5000", row["total"])
