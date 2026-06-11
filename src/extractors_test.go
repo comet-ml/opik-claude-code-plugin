@@ -167,7 +167,7 @@ func TestExtractFileAttachmentsSnapshotByType(t *testing.T) {
 		makeAttachment("/repo/Makefile", "build:"),  // no extension → "other"
 	}
 
-	snap := extractFileAttachmentsSnapshot(entries)
+	snap := extractFileAttachmentsSnapshot(entries, entries)
 	if snap == nil {
 		t.Fatal("expected non-nil snapshot")
 	}

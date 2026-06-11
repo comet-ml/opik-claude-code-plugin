@@ -379,12 +379,76 @@ func thinkingLevel(tokens int) string {
 // extractToolResultsSnapshot aggregates tool_result bytes grouped by the
 // tool that produced them. `cc.tool_results.{summary, by_tool}`.
 //
+// Mixed accounting (OPIK-6873): token sums are cumulative-to-date
+// (fullEntries) because every prior result is replayed in each request —
+// SUM of the per-trace value across a session's traces yields
+// billing-weighted attribution. Counts are new-this-turn (turnEntries) so
+// the same SUM yields true call counts instead of a quadratic blow-up.
+func extractToolResultsSnapshot(fullEntries, turnEntries []TranscriptEntry) map[string]interface{} {
+	full := toolResultGroups(fullEntries)
+	if len(full) == 0 {
+		return nil
+	}
+	turn := toolResultGroups(turnEntries)
+
+	names := make([]string, 0, len(full)+len(turn))
+	seen := map[string]bool{}
+	for name := range full {
+		names = append(names, name)
+		seen[name] = true
+	}
+	// A result whose tool_use predates the turn boundary can land under a
+	// different key in the suffix walk (e.g. "unknown") — keep the union so
+	// its count isn't dropped.
+	for name := range turn {
+		if !seen[name] {
+			names = append(names, name)
+		}
+	}
+
+	totalTokens, totalCount := 0, 0
+	byToolOut := make([]map[string]interface{}, 0, len(names))
+	for _, name := range names {
+		tokens, count := 0, 0
+		if g := full[name]; g != nil {
+			tokens = g.tokens
+		}
+		if g := turn[name]; g != nil {
+			count = g.count
+		}
+		byToolOut = append(byToolOut, map[string]interface{}{
+			"name":   name,
+			"tokens": tokens,
+			"count":  count,
+		})
+		totalTokens += tokens
+		totalCount += count
+	}
+	sort.Slice(byToolOut, func(i, j int) bool {
+		return byToolOut[i]["tokens"].(int) > byToolOut[j]["tokens"].(int)
+	})
+	return map[string]interface{}{
+		"summary": map[string]interface{}{
+			"total_tokens": totalTokens,
+			"count":        totalCount,
+		},
+		"by_tool": byToolOut,
+	}
+}
+
+type toolResultGroup struct {
+	tokens, count int
+}
+
+// toolResultGroups walks entries in order and aggregates result tokens and
+// call counts per tool name.
+//
 // Two result-delivery shapes need special handling:
 //   - Normal tool_result: user message content block with type="tool_result".
 //   - ToolSearch: result is delivered as a `deferred_tools_delta` attachment
 //     (addedLines + addedNames). We attribute that delta's addedLines size
 //     to the ToolSearch tool_use that immediately preceded it.
-func extractToolResultsSnapshot(entries []TranscriptEntry) map[string]interface{} {
+func toolResultGroups(entries []TranscriptEntry) map[string]*toolResultGroup {
 	toolNames := map[string]string{}
 	for _, e := range entries {
 		if e.Type != "assistant" || e.Message == nil {
@@ -397,11 +461,8 @@ func extractToolResultsSnapshot(entries []TranscriptEntry) map[string]interface{
 		}
 	}
 
-	type group struct {
-		tokens, count int
-	}
+	type group = toolResultGroup
 	byTool := map[string]*group{}
-	totalTokens, totalCount := 0, 0
 
 	// Walk entries in order. Pair ToolSearch tool_uses with the
 	// `deferred_tools_delta` that immediately follows them (no intervening
@@ -414,7 +475,6 @@ func extractToolResultsSnapshot(entries []TranscriptEntry) map[string]interface{
 	//      drains the queue, so an unrelated delta (e.g. one triggered by
 	//      an MCP toggle) can't be mis-attributed to a stale ToolSearch.
 	var pendingToolSearches []string // tool_use IDs awaiting a delta
-	resultedIDs := map[string]bool{}
 	for _, e := range entries {
 		switch e.Type {
 		case "assistant":
@@ -460,9 +520,6 @@ func extractToolResultsSnapshot(entries []TranscriptEntry) map[string]interface{
 				}
 				g.tokens += tokens
 				g.count++
-				totalTokens += tokens
-				totalCount++
-				resultedIDs[c.ToolUseID] = true
 			}
 			// Any user message (with tool_result OR otherwise) breaks the
 			// ToolSearch→delta adjacency, so drain.
@@ -486,7 +543,6 @@ func extractToolResultsSnapshot(entries []TranscriptEntry) map[string]interface{
 			if payload == "" {
 				payload = strings.Join(e.Attachment.AddedNames, "\n")
 			}
-			pendingID := pendingToolSearches[0]
 			pendingToolSearches = pendingToolSearches[1:]
 			if payload == "" {
 				continue
@@ -499,33 +555,9 @@ func extractToolResultsSnapshot(entries []TranscriptEntry) map[string]interface{
 			}
 			g.tokens += tokens
 			g.count++
-			totalTokens += tokens
-			totalCount++
-			resultedIDs[pendingID] = true
 		}
 	}
-	if totalCount == 0 {
-		return nil
-	}
-
-	byToolOut := make([]map[string]interface{}, 0, len(byTool))
-	for name, g := range byTool {
-		byToolOut = append(byToolOut, map[string]interface{}{
-			"name":   name,
-			"tokens": g.tokens,
-			"count":  g.count,
-		})
-	}
-	sort.Slice(byToolOut, func(i, j int) bool {
-		return byToolOut[i]["tokens"].(int) > byToolOut[j]["tokens"].(int)
-	})
-	return map[string]interface{}{
-		"summary": map[string]interface{}{
-			"total_tokens": totalTokens,
-			"count":        totalCount,
-		},
-		"by_tool": byToolOut,
-	}
+	return byTool
 }
 
 // resultTokens estimates the token cost of a tool_result.content payload,
@@ -555,16 +587,82 @@ func resultTokens(content interface{}) int {
 	}
 }
 
-// extractUserPromptsSnapshot returns the per-turn user-text contribution.
+// extractUserPromptsSnapshot returns the user-text contribution.
 // Tool results don't count here (they're under cc.tool_results); skill
 // bodies don't count either (they're under cc.skills.loaded). Without
 // excluding skill bodies, a `Skill` tool_use would inflate user_prompts
 // by the entire skill body — 100K+ tokens for claude-api.
-// `cc.user_prompts.summary`.
-func extractUserPromptsSnapshot(entries []TranscriptEntry) map[string]interface{} {
-	skillBodyHashes := skillBodyHashSet(entries)
+//
+// Mixed accounting (OPIK-6873): token sums are cumulative-to-date
+// (fullEntries) because every prior prompt is replayed in each request —
+// SUM across a session's traces yields billing-weighted attribution.
+// Counts are new-this-turn (turnEntries) so the same SUM yields true
+// prompt counts. by_size buckets each prompt individually with the same
+// split (tokens cumulative, count new-this-turn).
+// `cc.user_prompts.{summary, by_size}`.
+func extractUserPromptsSnapshot(fullEntries, turnEntries []TranscriptEntry) map[string]interface{} {
+	// Hashes from the FULL transcript: a body loaded in an earlier turn
+	// must still be excluded from this turn's count pass.
+	skillBodyHashes := skillBodyHashSet(fullEntries)
 
-	totalTokens, count := 0, 0
+	type bucketAgg struct{ tokens, count int }
+	byBucket := map[string]*bucketAgg{}
+	bucketFor := func(name string) *bucketAgg {
+		b, ok := byBucket[name]
+		if !ok {
+			b = &bucketAgg{}
+			byBucket[name] = b
+		}
+		return b
+	}
+
+	cumTokens, cumCount := 0, 0
+	forEachUserPrompt(fullEntries, skillBodyHashes, func(tokens int) {
+		cumTokens += tokens
+		cumCount++
+		bucketFor(promptBucket(tokens)).tokens += tokens
+	})
+	if cumCount == 0 {
+		return nil
+	}
+
+	newTokens, newCount := 0, 0
+	forEachUserPrompt(turnEntries, skillBodyHashes, func(tokens int) {
+		newTokens += tokens
+		newCount++
+		bucketFor(promptBucket(tokens)).count++
+	})
+
+	bySize := make([]map[string]interface{}, 0, len(byBucket))
+	for _, name := range []string{"small", "medium", "large", "xlarge"} {
+		b, ok := byBucket[name]
+		if !ok {
+			continue
+		}
+		bySize = append(bySize, map[string]interface{}{
+			"bucket": name,
+			"tokens": b.tokens,
+			"count":  b.count,
+		})
+	}
+
+	summary := map[string]interface{}{
+		"total_tokens": cumTokens,
+		"count":        newCount,
+	}
+	if newCount > 0 {
+		// Back-compat: bucket of this turn's new prompt mass.
+		summary["bucket"] = promptBucket(newTokens)
+	}
+	return map[string]interface{}{
+		"summary": summary,
+		"by_size": bySize,
+	}
+}
+
+// forEachUserPrompt invokes fn with the token estimate of every user text
+// block that isn't an injected skill body.
+func forEachUserPrompt(entries []TranscriptEntry, skillBodyHashes map[string]bool, fn func(tokens int)) {
 	for _, e := range entries {
 		if e.Type != "user" || e.Message == nil {
 			continue
@@ -576,19 +674,8 @@ func extractUserPromptsSnapshot(entries []TranscriptEntry) map[string]interface{
 			if skillBodyHashes[sha256hex(c.Text)] {
 				continue
 			}
-			totalTokens += tokEstimateAs(c.Text, "user_prompt")
-			count++
+			fn(tokEstimateAs(c.Text, "user_prompt"))
 		}
-	}
-	if count == 0 {
-		return nil
-	}
-	return map[string]interface{}{
-		"summary": map[string]interface{}{
-			"total_tokens": totalTokens,
-			"count":        count,
-			"bucket":       promptBucket(totalTokens),
-		},
 	}
 }
 
@@ -624,11 +711,49 @@ func promptBucket(tokens int) string {
 }
 
 // extractFileAttachmentsSnapshot returns @-mentioned + system-injected file
-// attachments this turn grouped by file extension. Skill bodies are NOT here —
-// they go under cc.skills.loaded. `cc.file_attachments.{summary, by_type}`.
-func extractFileAttachmentsSnapshot(entries []TranscriptEntry) map[string]interface{} {
-	type group struct{ tokens, count int }
-	byExt := map[string]*group{}
+// attachments grouped by file extension. Skill bodies are NOT here — they
+// go under cc.skills.loaded.
+//
+// Mixed accounting (OPIK-6873): token sums are cumulative-to-date
+// (fullEntries) — attachments replay in every request after they're added —
+// while file counts are new-this-turn (turnEntries) so SUM across traces
+// yields true file counts. `cc.file_attachments.{summary, by_type}`.
+func extractFileAttachmentsSnapshot(fullEntries, turnEntries []TranscriptEntry) map[string]interface{} {
+	fullByExt, cumTokens, cumCount := fileAttachmentGroups(fullEntries)
+	if cumCount == 0 {
+		return nil
+	}
+	turnByExt, _, newCount := fileAttachmentGroups(turnEntries)
+
+	byTypeOut := make([]map[string]interface{}, 0, len(fullByExt))
+	for ext, g := range fullByExt {
+		count := 0
+		if t := turnByExt[ext]; t != nil {
+			count = t.count
+		}
+		byTypeOut = append(byTypeOut, map[string]interface{}{
+			"ext":        ext,
+			"tokens":     g.tokens,
+			"file_count": count,
+		})
+	}
+	sort.Slice(byTypeOut, func(i, j int) bool {
+		return byTypeOut[i]["tokens"].(int) > byTypeOut[j]["tokens"].(int)
+	})
+
+	return map[string]interface{}{
+		"summary": map[string]interface{}{
+			"total_tokens": cumTokens,
+			"file_count":   newCount,
+		},
+		"by_type": byTypeOut,
+	}
+}
+
+type fileAttachmentGroup struct{ tokens, count int }
+
+func fileAttachmentGroups(entries []TranscriptEntry) (map[string]*fileAttachmentGroup, int, int) {
+	byExt := map[string]*fileAttachmentGroup{}
 	total, fileCount := 0, 0
 
 	for _, e := range entries {
@@ -656,7 +781,7 @@ func extractFileAttachmentsSnapshot(entries []TranscriptEntry) map[string]interf
 
 		g, ok := byExt[ext]
 		if !ok {
-			g = &group{}
+			g = &fileAttachmentGroup{}
 			byExt[ext] = g
 		}
 		g.tokens += tokens
@@ -665,45 +790,29 @@ func extractFileAttachmentsSnapshot(entries []TranscriptEntry) map[string]interf
 		fileCount++
 	}
 
-	if fileCount == 0 {
-		return nil
-	}
-
-	byTypeOut := make([]map[string]interface{}, 0, len(byExt))
-	for ext, g := range byExt {
-		byTypeOut = append(byTypeOut, map[string]interface{}{
-			"ext":        ext,
-			"tokens":     g.tokens,
-			"file_count": g.count,
-		})
-	}
-	sort.Slice(byTypeOut, func(i, j int) bool {
-		return byTypeOut[i]["tokens"].(int) > byTypeOut[j]["tokens"].(int)
-	})
-
-	return map[string]interface{}{
-		"summary": map[string]interface{}{
-			"total_tokens": total,
-			"file_count":   fileCount,
-		},
-		"by_type": byTypeOut,
-	}
+	return byExt, total, fileCount
 }
 
 // extractPriorAssistantSnapshot is the cumulative cost of prior assistant
 // output in the session — what gets replayed every turn.
-// `cc.prior_assistant.summary`.
+//
+// Per-block attribution (OPIK-6873): only text and thinking blocks count.
+// tool_use blocks are excluded — their cost belongs to the tool lanes, and
+// counting them here would double-attribute the same tokens. Computed from
+// AttributedOutputTokens (per-block shares of the LLM call's measured
+// usage), not whole-message usage.output_tokens.
+// `cc.prior_assistant.{summary, by_content}`.
 func extractPriorAssistantSnapshot(fullEntries, turnEntries []TranscriptEntry) map[string]interface{} {
-	sessionTokens, sessionMsgs := assistantOutputTotals(fullEntries)
-	turnTokens, turnMsgs := assistantOutputTotals(turnEntries)
-	priorTokens := sessionTokens - turnTokens
-	priorMsgs := sessionMsgs - turnMsgs
-	if priorTokens < 0 {
-		priorTokens = 0
-	}
-	if priorMsgs < 0 {
-		priorMsgs = 0
-	}
+	fullText, fullThinking := attributedTextThinking(fullEntries)
+	turnText, turnThinking := attributedTextThinking(turnEntries)
+	priorText := max(0, fullText-turnText)
+	priorThinking := max(0, fullThinking-turnThinking)
+
+	_, sessionMsgs := assistantOutputTotals(fullEntries)
+	_, turnMsgs := assistantOutputTotals(turnEntries)
+	priorMsgs := max(0, sessionMsgs-turnMsgs)
+
+	priorTokens := priorText + priorThinking
 	if priorTokens == 0 && priorMsgs == 0 {
 		return nil
 	}
@@ -712,7 +821,29 @@ func extractPriorAssistantSnapshot(fullEntries, turnEntries []TranscriptEntry) m
 			"total_tokens":  priorTokens,
 			"message_count": priorMsgs,
 		},
+		"by_content": map[string]interface{}{
+			"assistant_text": priorText,
+			"thinking":       priorThinking,
+		},
 	}
+}
+
+// attributedTextThinking sums per-block attributed output tokens for text
+// and thinking blocks. Per message, attributed shares sum to the call's
+// usage.output_tokens, so text+thinking here equals output minus the
+// tool_use share.
+func attributedTextThinking(entries []TranscriptEntry) (text, thinking int) {
+	parsed := ParseAssistantMessages(entries)
+	DeduplicateUsage(parsed)
+	for _, p := range parsed {
+		switch p.ContentType {
+		case "text":
+			text += p.AttributedOutputTokens
+		case "thinking":
+			thinking += p.AttributedOutputTokens
+		}
+	}
+	return
 }
 
 func assistantOutputTotals(entries []TranscriptEntry) (tokens, msgs int) {

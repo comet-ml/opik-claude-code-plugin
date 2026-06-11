@@ -90,8 +90,8 @@ func TestBuildLoadedSkillBodiesSlashCommand(t *testing.T) {
 	if !strings.HasPrefix(loads[0].Body, "Base directory") {
 		t.Errorf("body should start with the prefix the model actually sees; got %q", loads[0].Body[:30])
 	}
-	if loads[0].ToolUseID != "" {
-		t.Errorf("slash-command load should have empty ToolUseID, got %q", loads[0].ToolUseID)
+	if !strings.HasPrefix(loads[0].ToolUseID, "slash:") {
+		t.Errorf("slash-command load should have a synthetic slash:<idx> ToolUseID, got %q", loads[0].ToolUseID)
 	}
 }
 
