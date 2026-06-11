@@ -390,63 +390,73 @@ func toolUseNames(entries []TranscriptEntry) map[string]string {
 	return out
 }
 
+// renderBillingSnapshot emits a SQL-first shape (OPIK-6870):
+//
+//	cc.billing.lanes.<laneKey>.{total, cache_read, cache_creation, fresh, output}
+//	cc.billing.lanes.<laneKey>.items[] {name, total, cache_read, ...}
+//
+// Lane values are FIXED JSON paths so the BE's composition query stays one
+// `SUM(JSONExtractInt(metadata,'cc','billing','lanes','<lane>','<col>'))`
+// per cell — no ARRAY JOIN needed for totals. Breakdowns use the existing
+// generic pattern: ARRAY JOIN over `...,'lanes','<lane>','items'` with
+// label field `name`. `total` is precomputed (sum of the four columns) so
+// the Sankey/lane-card query is also a single path.
 func renderBillingSnapshot(callCount int, totals billingTier,
 	acc map[billingKey]*billingTier) map[string]interface{} {
 
-	byLane := map[string]*billingTier{}
-	byEntity := make([]map[string]interface{}, 0, len(acc))
+	tierFields := func(t *billingTier) map[string]interface{} {
+		return map[string]interface{}{
+			"total":          round(t.cacheRead + t.cacheCreation + t.fresh + t.output),
+			"cache_read":     round(t.cacheRead),
+			"cache_creation": round(t.cacheCreation),
+			"fresh":          round(t.fresh),
+			"output":         round(t.output),
+		}
+	}
+
+	laneTiers := map[string]*billingTier{}
+	laneItems := map[string][]map[string]interface{}{}
 	for key, t := range acc {
-		lt, ok := byLane[key.lane]
+		lt, ok := laneTiers[key.lane]
 		if !ok {
 			lt = &billingTier{}
-			byLane[key.lane] = lt
+			laneTiers[key.lane] = lt
 		}
 		lt.cacheRead += t.cacheRead
 		lt.cacheCreation += t.cacheCreation
 		lt.fresh += t.fresh
 		lt.output += t.output
-		byEntity = append(byEntity, map[string]interface{}{
-			"lane":           key.lane,
-			"entity":         key.entity,
-			"cache_read":     round(t.cacheRead),
-			"cache_creation": round(t.cacheCreation),
-			"fresh":          round(t.fresh),
-			"output":         round(t.output),
-		})
+		if key.entity != "" {
+			item := tierFields(t)
+			item["name"] = key.entity
+			laneItems[key.lane] = append(laneItems[key.lane], item)
+		}
 	}
-	byLaneOut := make([]map[string]interface{}, 0, len(byLane))
-	for lane, t := range byLane {
-		byLaneOut = append(byLaneOut, map[string]interface{}{
-			"lane":           lane,
-			"cache_read":     round(t.cacheRead),
-			"cache_creation": round(t.cacheCreation),
-			"fresh":          round(t.fresh),
-			"output":         round(t.output),
-		})
+
+	lanes := map[string]interface{}{}
+	for lane, t := range laneTiers {
+		obj := tierFields(t)
+		if items := laneItems[lane]; len(items) > 0 {
+			sort.Slice(items, func(i, j int) bool {
+				return items[i]["total"].(int) > items[j]["total"].(int)
+			})
+			obj["items"] = items
+		}
+		lanes[lane] = obj
 	}
-	sort.Slice(byLaneOut, func(i, j int) bool {
-		return billingRowTotal(byLaneOut[i]) > billingRowTotal(byLaneOut[j])
-	})
-	sort.Slice(byEntity, func(i, j int) bool {
-		return billingRowTotal(byEntity[i]) > billingRowTotal(byEntity[j])
-	})
 
 	return map[string]interface{}{
 		"llm_calls": callCount,
 		"totals": map[string]interface{}{
+			"total": round(totals.cacheRead + totals.cacheCreation +
+				totals.fresh + totals.output),
 			"cache_read":     round(totals.cacheRead),
 			"cache_creation": round(totals.cacheCreation),
 			"fresh":          round(totals.fresh),
 			"output":         round(totals.output),
 		},
-		"by_lane":   byLaneOut,
-		"by_entity": byEntity,
+		"lanes": lanes,
 	}
-}
-
-func billingRowTotal(row map[string]interface{}) int {
-	return row["cache_read"].(int) + row["cache_creation"].(int) +
-		row["fresh"].(int) + row["output"].(int)
 }
 
 func round(f float64) int { return int(f + 0.5) }

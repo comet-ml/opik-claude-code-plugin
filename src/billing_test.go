@@ -5,16 +5,18 @@ import (
 	"testing"
 )
 
-// Exactness contract: per call (and therefore per trace), the by_lane
+// Exactness contract: per call (and therefore per trace), the lane
 // columns — including the explicit `unattributed` row — sum EXACTLY to the
 // API-reported usage: input_tokens, cache_read, cache_creation, output.
 
-func billingColumnSums(snap map[string]interface{}) (read, write, fresh, output int) {
-	for _, row := range snap["by_lane"].([]map[string]interface{}) {
+func billingColumnSums(snap map[string]interface{}) (read, write, fresh, output, rows int) {
+	for _, v := range snap["lanes"].(map[string]interface{}) {
+		row := v.(map[string]interface{})
 		read += row["cache_read"].(int)
 		write += row["cache_creation"].(int)
 		fresh += row["fresh"].(int)
 		output += row["output"].(int)
+		rows++
 	}
 	return
 }
@@ -76,10 +78,9 @@ func TestBillingSumsExactlyToUsage(t *testing.T) {
 			totals, wantRead, wantWrite, wantFresh, wantOut)
 	}
 
-	// THE invariant: by_lane columns (incl. unattributed) sum to usage,
+	// THE invariant: lane columns (incl. unattributed) sum to usage,
 	// allowing ±1 per lane row for integer rounding of float cuts.
-	read, write, fresh, output := billingColumnSums(snap)
-	rows := len(snap["by_lane"].([]map[string]interface{}))
+	read, write, fresh, output, rows := billingColumnSums(snap)
 	closeEnough := func(got, want int) bool {
 		d := got - want
 		if d < 0 {
@@ -89,7 +90,7 @@ func TestBillingSumsExactlyToUsage(t *testing.T) {
 	}
 	if !closeEnough(read, wantRead) || !closeEnough(write, wantWrite) ||
 		!closeEnough(fresh, wantFresh) || !closeEnough(output, wantOut) {
-		t.Errorf("Σ by_lane = read %d / write %d / fresh %d / output %d, want %d/%d/%d/%d (±%d rounding)",
+		t.Errorf("Σ lanes = read %d / write %d / fresh %d / output %d, want %d/%d/%d/%d (±%d rounding)",
 			read, write, fresh, output, wantRead, wantWrite, wantFresh, wantOut, rows)
 	}
 }
@@ -117,8 +118,8 @@ func TestBillingPositionalCutMovesContentToCacheRead(t *testing.T) {
 
 	snap := computeBillingSnapshot(entries, entries)
 	lanes := map[string]map[string]interface{}{}
-	for _, row := range snap["by_lane"].([]map[string]interface{}) {
-		lanes[row["lane"].(string)] = row
+	for lane, v := range snap["lanes"].(map[string]interface{}) {
+		lanes[lane] = v.(map[string]interface{})
 	}
 
 	up := lanes["user_prompts"]
@@ -157,13 +158,14 @@ func TestBillingUnattributedAbsorbsUnknownMass(t *testing.T) {
 	entries = append(entries, assistantCall(t, "m1", u, Content{Type: "text", Text: "yo"})...)
 
 	snap := computeBillingSnapshot(entries, entries)
-	for _, row := range snap["by_lane"].([]map[string]interface{}) {
-		if row["lane"] == unattributedLane {
-			if row["fresh"].(int) != 5_000 {
-				t.Errorf("unattributed fresh = %d, want 5000", row["fresh"])
-			}
-			return
-		}
+	row, ok := snap["lanes"].(map[string]interface{})[unattributedLane].(map[string]interface{})
+	if !ok {
+		t.Fatal("expected an unattributed lane entry")
 	}
-	t.Fatal("expected an unattributed lane row")
+	if row["fresh"].(int) != 5_000 {
+		t.Errorf("unattributed fresh = %d, want 5000", row["fresh"])
+	}
+	if row["total"].(int) != 5_000 {
+		t.Errorf("unattributed total = %d, want 5000", row["total"])
+	}
 }
