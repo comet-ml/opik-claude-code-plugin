@@ -846,11 +846,25 @@ func attributedTextThinking(entries []TranscriptEntry) (text, thinking int) {
 	return
 }
 
+// assistantOutputTotals sums usage once per LLM call. The transcript
+// repeats the same message.usage on EVERY entry of a multi-block message
+// (one entry per content block, all sharing message.id) — summing per
+// entry double-counted output by ~2x (OPIK-6873 audit: a 2-call session
+// reported 2,302 prior tokens for 1,151 real ones).
 func assistantOutputTotals(entries []TranscriptEntry) (tokens, msgs int) {
+	seen := map[string]bool{}
 	for _, e := range entries {
 		if e.Type != "assistant" || e.Message == nil || e.Message.Usage == nil {
 			continue
 		}
+		id := e.Message.ID
+		if id == "" {
+			id = e.UUID
+		}
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
 		tokens += e.Message.Usage.OutputTokens
 		msgs++
 	}

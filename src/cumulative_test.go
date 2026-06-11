@@ -240,6 +240,40 @@ func TestUserPromptsExcludeSkillBodiesInCumulativePass(t *testing.T) {
 	}
 }
 
+func TestPriorAssistantNoDoubleCountAcrossMultiBlockEntries(t *testing.T) {
+	// The transcript repeats the same message.usage on EVERY entry of a
+	// multi-block message (one entry per content block, same message.id).
+	// Regression for the 2x inflation found in the OPIK-6873 audit: a
+	// 2-call session reported 2,302 prior tokens for 1,151 real ones.
+	usage := &Usage{OutputTokens: 1000}
+	twoEntriesOneCall := []TranscriptEntry{
+		{Type: "assistant", UUID: "u1", Message: &Message{ID: "m1", Usage: usage, Content: ContentSlice{
+			{Type: "thinking", Thinking: "redacted"},
+		}}},
+		{Type: "assistant", UUID: "u1#1", Message: &Message{ID: "m1", Usage: usage, Content: ContentSlice{
+			{Type: "text", Text: strings.Repeat("answer ", 50)},
+		}}},
+	}
+	turn := []TranscriptEntry{userPromptEntry("next")}
+	full := append(append([]TranscriptEntry{}, twoEntriesOneCall...), turn...)
+
+	tokens, msgs := assistantOutputTotals(full)
+	if tokens != 1000 {
+		t.Errorf("assistantOutputTotals tokens = %d, want 1000 (usage counted once per message)", tokens)
+	}
+	if msgs != 1 {
+		t.Errorf("assistantOutputTotals msgs = %d, want 1", msgs)
+	}
+
+	snap := extractPriorAssistantSnapshot(full, turn)
+	if got := summaryInt(snap, "total_tokens"); got != 1000 {
+		t.Errorf("prior total_tokens = %d, want 1000 (no double count)", got)
+	}
+	if got := summaryInt(snap, "message_count"); got != 1 {
+		t.Errorf("prior message_count = %d, want 1 LLM call", got)
+	}
+}
+
 func TestRepeatSkillLoadsKeepDistinctEvents(t *testing.T) {
 	slashLoad := func(name, body string) []TranscriptEntry {
 		return []TranscriptEntry{

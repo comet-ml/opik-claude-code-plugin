@@ -37,6 +37,14 @@ var ccBuiltinByVersion = map[string]ccBuiltinConstants{
 		SystemToolsTokens:         17600,
 		SystemToolsDeferredTokens: 19200,
 	},
+	// 2.1.173 moved most of the built-in tool catalog behind deferral:
+	// always-on schemas dropped 17.6k → 1.1k. Captured from /context on
+	// 2.1.173 + Fable (cc.context_runtime cross-check, OPIK-6873 audit).
+	"2.1.173": {
+		SystemPromptTokens:        4800,
+		SystemToolsTokens:         1100,
+		SystemToolsDeferredTokens: 11300,
+	},
 }
 
 // ccBuiltinFor returns the constants for the given CC version. Falls

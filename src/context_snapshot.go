@@ -158,6 +158,7 @@ func cumulativeMessagesTokens(entries []TranscriptEntry) int {
 	skillBodies := skillBodyHashSet(entries)
 
 	total := 0
+	seenMsgs := map[string]bool{}
 	for _, e := range entries {
 		switch e.Type {
 		case "user":
@@ -179,8 +180,18 @@ func cumulativeMessagesTokens(entries []TranscriptEntry) int {
 			if e.Message == nil || e.Message.Usage == nil {
 				continue
 			}
-			// Anthropic's own count for this LLM call's output —
-			// exact, no estimation drift.
+			// Anthropic's own count for this LLM call's output — exact,
+			// no estimation drift. Counted once per message.id: multi-block
+			// messages repeat the same usage on every entry (one entry per
+			// content block), so a per-entry sum double-counts.
+			id := e.Message.ID
+			if id == "" {
+				id = e.UUID
+			}
+			if seenMsgs[id] {
+				continue
+			}
+			seenMsgs[id] = true
 			total += e.Message.Usage.OutputTokens
 		}
 	}
