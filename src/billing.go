@@ -594,6 +594,9 @@ func renderBillingSnapshot(callCount int, totals billingTier,
 
 	return map[string]interface{}{
 		"llm_calls": callCount,
+		// The session's model — lets consumers price the tier columns
+		// without joining back to spans.
+		"model": billingModel,
 		"totals": map[string]interface{}{
 			"total": round(totals.cacheRead + totals.cacheCreation +
 				totals.fresh + totals.output),
