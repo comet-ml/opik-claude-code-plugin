@@ -10,8 +10,8 @@ import (
 type State struct {
 	TraceID      string `json:"trace_id"`
 	StartTime    string `json:"start_time"`
-	StartUnix    int64  `json:"start_unix,omitempty"`     // wall-clock seconds the current trace started
-	PromptHash   string `json:"prompt_hash,omitempty"`    // sha256 of the user prompt for the current trace
+	StartUnix    int64  `json:"start_unix,omitempty"`  // wall-clock seconds the current trace started
+	PromptHash   string `json:"prompt_hash,omitempty"` // sha256 of the user prompt for the current trace
 	SessionID    string `json:"session_id"`
 	Transcript   string `json:"transcript"`
 	StartLine    int    `json:"start_line"`

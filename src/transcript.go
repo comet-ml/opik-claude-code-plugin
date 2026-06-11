@@ -30,21 +30,21 @@ type TranscriptEntry struct {
 // readdedNames (names re-enabled after a prior removal), and
 // pendingMcpServers (servers connecting; their tools not yet visible).
 type Attachment struct {
-	Type              string          `json:"type"`
-	Content           json.RawMessage `json:"content,omitempty"`
-	Names             []string        `json:"names,omitempty"`
-	SkillCount        int             `json:"skillCount,omitempty"`
-	IsInitial         bool            `json:"isInitial,omitempty"`
-	AddedNames        []string        `json:"addedNames,omitempty"`
-	AddedLines        []string        `json:"addedLines,omitempty"`
+	Type       string          `json:"type"`
+	Content    json.RawMessage `json:"content,omitempty"`
+	Names      []string        `json:"names,omitempty"`
+	SkillCount int             `json:"skillCount,omitempty"`
+	IsInitial  bool            `json:"isInitial,omitempty"`
+	AddedNames []string        `json:"addedNames,omitempty"`
+	AddedLines []string        `json:"addedLines,omitempty"`
 	// AddedBlocks carries multi-line text payloads. `mcp_instructions_delta`
 	// uses it for per-server instructions (the always-on context CC injects
 	// for each connected MCP server: capabilities, constraints, etc.). One
 	// block per name, parallel arrays.
-	AddedBlocks       []string        `json:"addedBlocks,omitempty"`
-	RemovedNames      []string        `json:"removedNames,omitempty"`
-	ReaddedNames      []string        `json:"readdedNames,omitempty"`
-	PendingMcpServers []string        `json:"pendingMcpServers,omitempty"`
+	AddedBlocks       []string `json:"addedBlocks,omitempty"`
+	RemovedNames      []string `json:"removedNames,omitempty"`
+	ReaddedNames      []string `json:"readdedNames,omitempty"`
+	PendingMcpServers []string `json:"pendingMcpServers,omitempty"`
 }
 
 // ContentString decodes Content as a string. Returns "" if Content is missing

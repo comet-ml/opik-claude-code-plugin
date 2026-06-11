@@ -80,16 +80,16 @@ func TestParseContextMarkdownCategories(t *testing.T) {
 		t.Fatalf("categories missing or wrong type: %T", out["categories"])
 	}
 	wants := map[string]int{
-		"system_prompt":           8000,
-		"system_tools":            17600,
-		"mcp_tools_deferred":      2500,
-		"system_tools_deferred":   19200,
-		"custom_agents":           3300,
-		"memory_files":            2900,
-		"skills":                  2100,
-		"messages":                6100,
-		"free_space":              928600,
-		"autocompact_buffer":      33000,
+		"system_prompt":         8000,
+		"system_tools":          17600,
+		"mcp_tools_deferred":    2500,
+		"system_tools_deferred": 19200,
+		"custom_agents":         3300,
+		"memory_files":          2900,
+		"skills":                2100,
+		"messages":              6100,
+		"free_space":            928600,
+		"autocompact_buffer":    33000,
 	}
 	for k, want := range wants {
 		if got := cats[k]; got != want {
@@ -162,12 +162,12 @@ func TestParseTokens(t *testing.T) {
 
 func TestNormalizeCategoryKey(t *testing.T) {
 	cases := map[string]string{
-		"System prompt":            "system_prompt",
-		"System tools (deferred)":  "system_tools_deferred",
-		"MCP tools (deferred)":     "mcp_tools_deferred",
-		"Custom agents":            "custom_agents",
-		"Free space":               "free_space",
-		"Autocompact buffer":       "autocompact_buffer",
+		"System prompt":           "system_prompt",
+		"System tools (deferred)": "system_tools_deferred",
+		"MCP tools (deferred)":    "mcp_tools_deferred",
+		"Custom agents":           "custom_agents",
+		"Free space":              "free_space",
+		"Autocompact buffer":      "autocompact_buffer",
 	}
 	for in, want := range cases {
 		if got := normalizeCategoryKey(in); got != want {

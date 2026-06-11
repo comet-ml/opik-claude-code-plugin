@@ -10,10 +10,10 @@ import (
 //
 //   - SystemPromptTokens         the bundled default system prompt
 //   - SystemToolsTokens          full JSON schemas for the default tools
-//                                (Read, Edit, Bash, …) — not the names alone
+//     (Read, Edit, Bash, …) — not the names alone
 //   - SystemToolsDeferredTokens  the catalog of deferred tool definitions
-//                                (Cron*, Task*, Web*, Monitor, …) plus any
-//                                schemas Claude Code injects on demand
+//     (Cron*, Task*, Web*, Monitor, …) plus any
+//     schemas Claude Code injects on demand
 //
 // These are taken from `/context` for a known CC version. They drift with
 // each binary release, so the table below should grow over time.

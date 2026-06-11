@@ -76,7 +76,7 @@ func extractMemorySnapshot() map[string]interface{} {
 		// tokenize as separate short tokens — denser than a skill body
 		// (3.5) or prose (3.9). Calibrated against /context's "Memory
 		// files" rows across 7 rule files (mean 2.37 chars/token).
-		tokens := tokEstimateAs(s, "memory_file")
+		tokens := measuredOrEstimate(s, "memory_file")
 		files = append(files, map[string]interface{}{
 			"path":        p,
 			"sha256":      sha256hex(s),
@@ -182,7 +182,7 @@ func extractAgentsSnapshot() map[string]interface{} {
 		if displayName == "" {
 			displayName = f.basename
 		}
-		tokens := tokEstimateAs(meta, "agent_frontmatter")
+		tokens := measuredOrEstimate(meta, "agent_frontmatter")
 		agents = append(agents, map[string]interface{}{
 			"name":        f.nsPrefix + displayName,
 			"path":        f.path,

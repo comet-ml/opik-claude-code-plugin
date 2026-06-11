@@ -89,4 +89,3 @@ description: Should not show up.
 		t.Errorf("bad:ghost must be filtered out (disabled plugin), got %v", names)
 	}
 }
-

@@ -25,8 +25,8 @@ type HookInput struct {
 	Prompt              string `json:"prompt"`
 	AgentID             string `json:"agent_id"`
 	AgentType           string `json:"agent_type"`
-	AgentTranscriptPath  string `json:"agent_transcript_path"`
-	CustomInstructions   string `json:"custom_instructions"`
+	AgentTranscriptPath string `json:"agent_transcript_path"`
+	CustomInstructions  string `json:"custom_instructions"`
 }
 
 var (
@@ -49,6 +49,14 @@ func main() {
 	// background subprocess to ask claude `/context` and PATCH the result
 	// onto the trace. This path never reads stdin; it shells out to claude
 	// and exits.
+	// Detached token-count mode: measure exact token counts for anchor
+	// candidates via the free count_tokens endpoint and persist them for
+	// the next flush (see count_tokens.go).
+	if os.Getenv("OPIK_CC_TOKEN_COUNT") == "1" {
+		runTokenCountMode()
+		os.Exit(0)
+	}
+
 	if os.Getenv("OPIK_CC_CONTEXT_FETCH") == "1" {
 		var err error
 		config, err = LoadConfig()
@@ -232,6 +240,9 @@ func onStop() {
 	// claude binary can't break tracing.
 	if err := spawnDetachedContextFetch(state.SessionID, state.TraceID, state.Cwd); err != nil {
 		debugLog("spawn context fetch: %v", err)
+	}
+	if err := spawnDetachedTokenCount(state.SessionID); err != nil {
+		debugLog("spawn token count: %v", err)
 	}
 
 	debugLog("done")
@@ -727,12 +738,12 @@ func processTranscriptEntries(traceID string, entries []TranscriptEntry, parentS
 
 		if p.Usage != nil && span.Usage == nil {
 			span.Usage = map[string]int{
-				"prompt_tokens":     p.Usage.InputTokens,
-				"completion_tokens": p.Usage.OutputTokens,
-				"total_tokens":      p.Usage.InputTokens + p.Usage.OutputTokens,
-				"original_usage.input_tokens":               p.Usage.InputTokens,
-				"original_usage.output_tokens":              p.Usage.OutputTokens,
-				"original_usage.cache_read_input_tokens":    p.Usage.CacheReadInputTokens,
+				"prompt_tokens":                              p.Usage.InputTokens,
+				"completion_tokens":                          p.Usage.OutputTokens,
+				"total_tokens":                               p.Usage.InputTokens + p.Usage.OutputTokens,
+				"original_usage.input_tokens":                p.Usage.InputTokens,
+				"original_usage.output_tokens":               p.Usage.OutputTokens,
+				"original_usage.cache_read_input_tokens":     p.Usage.CacheReadInputTokens,
 				"original_usage.cache_creation_input_tokens": p.Usage.CacheCreationInputTokens,
 			}
 			span.Provider = "anthropic"
@@ -1059,4 +1070,3 @@ func debugLog(format string, args ...interface{}) {
 	fmt.Fprintf(f, "[%s] ", ts)
 	fmt.Fprintf(f, format+"\n", args...)
 }
-

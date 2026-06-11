@@ -130,10 +130,10 @@ func buildContextSnapshot(state *State) map[string]interface{} {
 		}
 	}
 	return map[string]interface{}{
-		"categories":       cats,
-		"total_tokens":     alwaysOn, // ← matches /context and the API
-		"deferred_tokens":  deferred, // ← informational; loaded on demand
-		"source":           "estimated_sync",
+		"categories":      cats,
+		"total_tokens":    alwaysOn, // ← matches /context and the API
+		"deferred_tokens": deferred, // ← informational; loaded on demand
+		"source":          "estimated_sync",
 	}
 }
 

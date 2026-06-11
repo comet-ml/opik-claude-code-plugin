@@ -20,10 +20,10 @@ func TestReadEnabledPluginsField(t *testing.T) {
 	}`)
 	got := readEnabledPluginsField(path)
 	wantEnabled := map[string]bool{
-		"on@mp":      true,
-		"off@mp":     false,
-		"strtrue@mp": true,
-		"str1@mp":    true,
+		"on@mp":       true,
+		"off@mp":      false,
+		"strtrue@mp":  true,
+		"str1@mp":     true,
 		"strfalse@mp": false,
 	}
 	for k, want := range wantEnabled {

@@ -62,6 +62,7 @@ func computeBillingSnapshot(fullEntries, turnEntries []TranscriptEntry) map[stri
 		return nil
 	}
 
+	setBillingModel(fullEntries) // anchors are keyed (model, sha)
 	staticPieces := staticPrefixPieces(fullEntries)
 	skillBodyNames := skillBodyNameBySHA(fullEntries)
 	toolNames := toolUseNames(fullEntries)
@@ -144,7 +145,12 @@ func staticPrefixPieces(fullEntries []TranscriptEntry) []billingPiece {
 		}
 	}
 
-	if consts, matched := ccBuiltinFor(findCCVersion(fullEntries)); matched != "" {
+	if measured, ok := measuredBuiltinStatic(findCCVersion(fullEntries)); ok {
+		// Cold-start residual measured on THIS machine + version — more
+		// trustworthy than the hand-maintained table (can't split prompt
+		// vs schemas, so it's one entity).
+		add("static_overhead", "builtin_static", measured)
+	} else if consts, matched := ccBuiltinFor(findCCVersion(fullEntries)); matched != "" {
 		add("static_overhead", "system_prompt", consts.SystemPromptTokens)
 		add("static_overhead", "builtin_tool_schemas", consts.SystemToolsTokens)
 	}
@@ -204,14 +210,14 @@ func conversationPieces(entries []TranscriptEntry, skillBodyNames map[string]str
 				switch c.Type {
 				case "text":
 					if name, ok := skillBodyNames[sha256hex(c.Text)]; ok {
-						add("skills", name, kindUsage, float64(tokEstimateAs(c.Text, "skill_body")), false)
+						add("skills", name, kindUsage, float64(measuredOrEstimate(c.Text, "skill_body")), false)
 					} else {
-						tokens := tokEstimateAs(c.Text, "user_prompt")
+						tokens := measuredOrEstimate(c.Text, "user_prompt")
 						add("user_prompts", promptBucket(tokens), kindUsage, float64(tokens), false)
 					}
 				case "tool_result":
 					lane, entity := toolLane(toolNames[c.ToolUseID])
-					add(lane, entity, kindUsage, float64(resultTokens(c.Content)), false)
+					add(lane, entity, kindUsage, float64(measuredResultTokens(c.Content)), false)
 				}
 			}
 		case "attachment":
@@ -237,7 +243,7 @@ func conversationPieces(entries []TranscriptEntry, skillBodyNames map[string]str
 				sort.Strings(names) // deterministic layout
 				for _, name := range names {
 					add("skills", name, kindDefinition,
-						float64(tokEstimateAs(blocks[name], "skill_listing_menu")), false)
+						float64(measuredOrEstimate(blocks[name], "skill_listing_menu")), false)
 				}
 			case "file":
 				var w struct {
@@ -265,7 +271,7 @@ func conversationPieces(entries []TranscriptEntry, skillBodyNames map[string]str
 				if len(e.Attachment.AddedNames) == len(e.Attachment.AddedBlocks) && len(e.Attachment.AddedNames) > 0 {
 					for i, name := range e.Attachment.AddedNames {
 						add("mcp_servers", name, kindDefinition,
-							float64(tokEstimateAs(e.Attachment.AddedBlocks[i], "prose")), false)
+							float64(measuredOrEstimate(e.Attachment.AddedBlocks[i], "prose")), false)
 					}
 				} else {
 					add("mcp_servers", "instructions", kindDefinition,
@@ -449,6 +455,15 @@ func tierFor(acc map[billingKey]*billingTier, key billingKey) *billingTier {
 		acc[key] = t
 	}
 	return t
+}
+
+// measuredResultTokens is resultTokens with anchor lookup for the common
+// string-payload shape.
+func measuredResultTokens(content interface{}) int {
+	if s, ok := content.(string); ok {
+		return measuredOrEstimate(s, "tool_result")
+	}
+	return resultTokens(content)
 }
 
 func skillBodyNameBySHA(entries []TranscriptEntry) map[string]string {

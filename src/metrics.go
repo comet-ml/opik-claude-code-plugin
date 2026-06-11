@@ -245,7 +245,6 @@ func postTraceMetrics(state *State) {
 		state.TraceID[:8], repo, branch, commits, insC+delC, files, authored, overwritten, len(metrics))
 }
 
-
 // mergeMetadataCC reads the trace's current metadata, merges new keys into
 // the `cc` block (preserving identity already written at trace creation and
 // any non-cc metadata Opik may have added), and PATCHes the trace.
