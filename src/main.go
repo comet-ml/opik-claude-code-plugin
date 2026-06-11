@@ -766,6 +766,10 @@ func domainSnapshotsFromEntries(fullEntries, turnEntries []TranscriptEntry) map[
 		"user_prompts":     extractUserPromptsSnapshot(fullEntries, turnEntries),
 		"file_attachments": extractFileAttachmentsSnapshot(fullEntries, turnEntries),
 		"prior_assistant":  extractPriorAssistantSnapshot(fullEntries, turnEntries),
+		// Billing-native view: per-call positional cache-tier attribution.
+		// Tier tokens are per-call billing events — additive across traces
+		// and exactly reconciled to API usage (see billing.go).
+		"billing":          computeBillingSnapshot(fullEntries, turnEntries),
 		"assistant_text":   extractAssistantTextSnapshot(turnEntries),
 		"output_tokens":    extractOutputTokensSnapshot(turnEntries, parsedTurn),
 		// cc_builtin covers the bundled system-prompt + tool-catalog cost
