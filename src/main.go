@@ -747,38 +747,25 @@ func processTranscriptEntries(traceID string, entries []TranscriptEntry, parentS
 	return spans
 }
 
-// domainSnapshotsFromEntries returns every per-domain snapshot keyed by
+// domainSnapshotsFromEntries returns the per-domain snapshots keyed by
 // domain name. Called by postTraceMetrics for the trace-level write and
-// by dryrun_test for offline validation. The parsed+deduped slice is
-// computed once and passed to the few extractors that need it
-// (extractThinkingSnapshot), avoiding redundant work.
+// by dryrun_test for offline validation.
 func domainSnapshotsFromEntries(fullEntries, turnEntries []TranscriptEntry) map[string]map[string]interface{} {
-	parsedTurn := ParseAssistantMessages(turnEntries)
-	DeduplicateUsage(parsedTurn)
-
 	return map[string]map[string]interface{}{
-		"skills":           BuildSkillsSnapshot(fullEntries),
-		"tools":            extractToolsSnapshot(fullEntries),
-		"memory":           extractMemorySnapshot(),
-		"agents":           extractAgentsSnapshot(),
-		"thinking":         extractThinkingSnapshot(turnEntries, parsedTurn),
-		"tool_results":     extractToolResultsSnapshot(fullEntries, turnEntries),
-		"user_prompts":     extractUserPromptsSnapshot(fullEntries, turnEntries),
-		"file_attachments": extractFileAttachmentsSnapshot(fullEntries, turnEntries),
-		"prior_assistant":  extractPriorAssistantSnapshot(fullEntries, turnEntries),
-		// Billing-native view: per-call positional cache-tier attribution.
+		// The product schema: per-call positional cache-tier attribution.
 		// Tier tokens are per-call billing events — additive across traces
-		// and exactly reconciled to API usage (see billing.go).
-		"billing":          computeBillingSnapshot(fullEntries, turnEntries),
-		"assistant_text":   extractAssistantTextSnapshot(turnEntries),
-		"output_tokens":    extractOutputTokensSnapshot(turnEntries, parsedTurn),
+		// and exactly reconciled to API usage (see billing.go). Every UI
+		// lane value, breakdown item, stacked definition/usage segment and
+		// count comes from this block.
+		"billing": computeBillingSnapshot(fullEntries, turnEntries),
 		// cc_builtin covers the bundled system-prompt + tool-catalog cost
 		// /context reports under "System prompt" / "System tools" /
 		// "System tools (deferred)". These never appear in the transcript
 		// (the binary holds the schemas internally), so values are
 		// version-keyed approximations — marked `estimated: true` in the
-		// payload so the FE can render them as such.
-		"cc_builtin":       extractCCBuiltinSnapshot(fullEntries),
+		// payload so the FE can render them as such. Kept for the Static
+		// overhead disclaimer and calibration diagnostics.
+		"cc_builtin": extractCCBuiltinSnapshot(fullEntries),
 	}
 }
 

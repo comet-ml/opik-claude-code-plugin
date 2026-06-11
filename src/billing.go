@@ -37,6 +37,9 @@ type billingTier struct {
 
 type billingKey struct {
 	lane, entity string
+	// "definition" = always-on config that ships regardless of activity;
+	// "usage" = conversation-driven content. The UI stacks the two.
+	kind string
 }
 
 type billingPiece struct {
@@ -45,7 +48,11 @@ type billingPiece struct {
 	exact  bool // usage-derived (assistant blocks): never rescaled
 }
 
-const unattributedLane = "unattributed"
+const (
+	unattributedLane = "unattributed"
+	kindDefinition   = "definition"
+	kindUsage        = "usage"
+)
 
 // computeBillingSnapshot returns the `cc.billing` block for the turn, or nil
 // when the turn contains no usage-bearing LLM calls.
@@ -58,6 +65,7 @@ func computeBillingSnapshot(fullEntries, turnEntries []TranscriptEntry) map[stri
 	staticPieces := staticPrefixPieces(fullEntries)
 	skillBodyNames := skillBodyNameBySHA(fullEntries)
 	toolNames := toolUseNames(fullEntries)
+	counts := countNewEvents(turnEntries, skillBodyNames, toolNames)
 
 	acc := map[billingKey]*billingTier{}
 	totals := billingTier{}
@@ -75,7 +83,7 @@ func computeBillingSnapshot(fullEntries, turnEntries []TranscriptEntry) map[stri
 		totals.output += float64(call.output)
 	}
 
-	return renderBillingSnapshot(len(calls), totals, acc)
+	return renderBillingSnapshot(len(calls), totals, acc, counts)
 }
 
 type billingCall struct {
@@ -132,7 +140,7 @@ func staticPrefixPieces(fullEntries []TranscriptEntry) []billingPiece {
 	var out []billingPiece
 	add := func(lane, entity string, tokens int) {
 		if tokens > 0 {
-			out = append(out, billingPiece{billingKey{lane, entity}, float64(tokens), false})
+			out = append(out, billingPiece{billingKey{lane, entity, kindDefinition}, float64(tokens), false})
 		}
 	}
 
@@ -180,9 +188,9 @@ func conversationPieces(entries []TranscriptEntry, skillBodyNames map[string]str
 	parsedIdx := 0
 
 	var out []billingPiece
-	add := func(lane, entity string, tokens float64, exact bool) {
+	add := func(lane, entity, kind string, tokens float64, exact bool) {
 		if tokens > 0 {
-			out = append(out, billingPiece{billingKey{lane, entity}, tokens, exact})
+			out = append(out, billingPiece{billingKey{lane, entity, kind}, tokens, exact})
 		}
 	}
 
@@ -196,14 +204,14 @@ func conversationPieces(entries []TranscriptEntry, skillBodyNames map[string]str
 				switch c.Type {
 				case "text":
 					if name, ok := skillBodyNames[sha256hex(c.Text)]; ok {
-						add("skills", name, float64(tokEstimateAs(c.Text, "skill_body")), false)
+						add("skills", name, kindUsage, float64(tokEstimateAs(c.Text, "skill_body")), false)
 					} else {
 						tokens := tokEstimateAs(c.Text, "user_prompt")
-						add("user_prompts", promptBucket(tokens), float64(tokens), false)
+						add("user_prompts", promptBucket(tokens), kindUsage, float64(tokens), false)
 					}
 				case "tool_result":
 					lane, entity := toolLane(toolNames[c.ToolUseID])
-					add(lane, entity, float64(resultTokens(c.Content)), false)
+					add(lane, entity, kindUsage, float64(resultTokens(c.Content)), false)
 				}
 			}
 		case "attachment":
@@ -212,8 +220,25 @@ func conversationPieces(entries []TranscriptEntry, skillBodyNames map[string]str
 			}
 			switch e.Attachment.Type {
 			case "skill_listing":
-				add("skills", "menu",
-					float64(tokEstimateAs(e.Attachment.ContentString(), "skill_listing_menu")), false)
+				// Per-skill DEFINITION pieces: the listing is one attachment,
+				// but each skill owns its menu block — that's what makes the
+				// stacked definition/usage bars and the unused badge work
+				// straight from billing.
+				blocks := parseSkillListingMenu(e.Attachment.ContentString(), e.Attachment.Names)
+				if len(blocks) == 0 {
+					add("skills", "menu", kindDefinition,
+						float64(tokEstimateAs(e.Attachment.ContentString(), "skill_listing_menu")), false)
+					break
+				}
+				names := make([]string, 0, len(blocks))
+				for name := range blocks {
+					names = append(names, name)
+				}
+				sort.Strings(names) // deterministic layout
+				for _, name := range names {
+					add("skills", name, kindDefinition,
+						float64(tokEstimateAs(blocks[name], "skill_listing_menu")), false)
+				}
 			case "file":
 				var w struct {
 					File struct {
@@ -226,19 +251,26 @@ func conversationPieces(entries []TranscriptEntry, skillBodyNames map[string]str
 					if ext == "" {
 						ext = "other"
 					}
-					add("file_attachments", ext, float64(tokEstimate(w.File.Content)), false)
+					add("file_attachments", ext, kindUsage, float64(tokEstimate(w.File.Content)), false)
 				}
 			case "deferred_tools_delta":
 				payload := strings.Join(e.Attachment.AddedLines, "\n")
 				if payload == "" {
 					payload = strings.Join(e.Attachment.AddedNames, "\n")
 				}
-				add("mcp_servers", "catalog_deltas",
+				add("mcp_servers", "catalog_deltas", kindDefinition,
 					float64(tokEstimateAs(payload, "deferred_tools_payload")), false)
 			case "mcp_instructions_delta":
-				payload := strings.Join(e.Attachment.AddedBlocks, "\n")
-				add("mcp_servers", "instructions",
-					float64(tokEstimateAs(payload, "prose")), false)
+				// Per-server when the parallel arrays line up.
+				if len(e.Attachment.AddedNames) == len(e.Attachment.AddedBlocks) && len(e.Attachment.AddedNames) > 0 {
+					for i, name := range e.Attachment.AddedNames {
+						add("mcp_servers", name, kindDefinition,
+							float64(tokEstimateAs(e.Attachment.AddedBlocks[i], "prose")), false)
+					}
+				} else {
+					add("mcp_servers", "instructions", kindDefinition,
+						float64(tokEstimateAs(strings.Join(e.Attachment.AddedBlocks, "\n"), "prose")), false)
+				}
 			}
 		case "assistant":
 			if e.Message == nil || len(e.Message.Content) == 0 {
@@ -255,10 +287,10 @@ func conversationPieces(entries []TranscriptEntry, skillBodyNames map[string]str
 				parsedIdx++
 				switch p.ContentType {
 				case "text", "thinking":
-					add("prior_assistant", p.ContentType, float64(p.AttributedOutputTokens), true)
+					add("prior_assistant", p.ContentType, kindUsage, float64(p.AttributedOutputTokens), true)
 				case "tool_use":
 					lane, entity := toolLane(p.Content.Name)
-					add(lane, entity, float64(p.AttributedOutputTokens), true)
+					add(lane, entity, kindUsage, float64(p.AttributedOutputTokens), true)
 				}
 			}
 		}
@@ -308,7 +340,7 @@ func reconcileToUsage(pieces []billingPiece, total float64) []billingPiece {
 		}
 	case sum < total:
 		pieces = append(pieces, billingPiece{
-			billingKey{unattributedLane, ""}, total - sum, false})
+			billingKey{unattributedLane, "", kindUsage}, total - sum, false})
 	}
 	return pieces
 }
@@ -343,17 +375,71 @@ func attributeOutput(callEntries []TranscriptEntry, acc map[billingKey]*billingT
 		var key billingKey
 		switch p.ContentType {
 		case "thinking":
-			key = billingKey{"output", "thinking"}
+			key = billingKey{"output", "thinking", kindUsage}
 		case "text":
-			key = billingKey{"output", "assistant_text"}
+			key = billingKey{"output", "assistant_text", kindUsage}
 		case "tool_use":
 			lane, entity := toolLane(p.Content.Name)
-			key = billingKey{"output", lane + "/" + entity}
+			key = billingKey{"output", lane + "/" + entity, kindUsage}
 		default:
 			continue
 		}
 		tierFor(acc, key).output += float64(p.AttributedOutputTokens)
 	}
+}
+
+// countNewEvents returns the number of NEW events this turn per usage key:
+// prompts per bucket, tool calls per tool/server, files per ext, skill loads
+// per skill. Additive across traces (each event counted once, in its turn),
+// so plain SUM yields true counts — the same split rule as everywhere else.
+func countNewEvents(turnEntries []TranscriptEntry, skillBodyNames map[string]string,
+	toolNames map[string]string) map[billingKey]int {
+
+	counts := map[billingKey]int{}
+	bump := func(lane, entity string) {
+		counts[billingKey{lane, entity, kindUsage}]++
+	}
+
+	for _, e := range turnEntries {
+		switch e.Type {
+		case "user":
+			if e.Message == nil {
+				continue
+			}
+			for _, c := range e.Message.Content {
+				switch c.Type {
+				case "text":
+					if _, ok := skillBodyNames[sha256hex(c.Text)]; ok {
+						continue // loads counted via buildLoadedSkillBodies below
+					}
+					bump("user_prompts", promptBucket(tokEstimateAs(c.Text, "user_prompt")))
+				case "tool_result":
+					lane, entity := toolLane(toolNames[c.ToolUseID])
+					bump(lane, entity)
+				}
+			}
+		case "attachment":
+			if e.Attachment == nil || e.Attachment.Type != "file" {
+				continue
+			}
+			var w struct {
+				File struct {
+					Path string `json:"path,omitempty"`
+				} `json:"file"`
+			}
+			if json.Unmarshal(e.Attachment.Content, &w) == nil {
+				ext := strings.ToLower(filepath.Ext(w.File.Path))
+				if ext == "" {
+					ext = "other"
+				}
+				bump("file_attachments", ext)
+			}
+		}
+	}
+	for _, l := range buildLoadedSkillBodies(turnEntries) {
+		bump("skills", l.Name)
+	}
+	return counts
 }
 
 func tierFor(acc map[billingKey]*billingTier, key billingKey) *billingTier {
@@ -402,7 +488,7 @@ func toolUseNames(entries []TranscriptEntry) map[string]string {
 // label field `name`. `total` is precomputed (sum of the four columns) so
 // the Sankey/lane-card query is also a single path.
 func renderBillingSnapshot(callCount int, totals billingTier,
-	acc map[billingKey]*billingTier) map[string]interface{} {
+	acc map[billingKey]*billingTier, counts map[billingKey]int) map[string]interface{} {
 
 	tierFields := func(t *billingTier) map[string]interface{} {
 		return map[string]interface{}{
@@ -412,6 +498,12 @@ func renderBillingSnapshot(callCount int, totals billingTier,
 			"fresh":          round(t.fresh),
 			"output":         round(t.output),
 		}
+	}
+
+	// A key with new events this turn but no tier mass yet (e.g. the very
+	// first event landed after the last call's request) must still surface.
+	for key := range counts {
+		tierFor(acc, key)
 	}
 
 	laneTiers := map[string]*billingTier{}
@@ -429,6 +521,8 @@ func renderBillingSnapshot(callCount int, totals billingTier,
 		if key.entity != "" {
 			item := tierFields(t)
 			item["name"] = key.entity
+			item["kind"] = key.kind
+			item["count"] = counts[key]
 			laneItems[key.lane] = append(laneItems[key.lane], item)
 		}
 	}

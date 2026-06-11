@@ -18,17 +18,13 @@ func TestDryRunOnTestThread(t *testing.T) {
 		t.Fatal(err)
 	}
 	snaps := domainSnapshotsFromEntries(entries, entries)
-	for _, domain := range []string{"tools", "skills", "user_prompts", "tool_results", "thinking", "memory", "agents", "cc_builtin", "assistant_text", "prior_assistant", "file_attachments", "output_tokens"} {
+	for _, domain := range []string{"billing", "cc_builtin"} {
 		fmt.Printf("--- %s ---\n", domain)
 		if snaps[domain] == nil {
 			fmt.Println("(nil)")
 			continue
 		}
-		out := snaps[domain]
-		if domain == "tools" {
-			out = map[string]interface{}{"summary": snaps[domain]["summary"]}
-		}
-		b, _ := json.MarshalIndent(out, "", "  ")
+		b, _ := json.MarshalIndent(snaps[domain], "", "  ")
 		fmt.Println(string(b))
 	}
 }
