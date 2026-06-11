@@ -145,12 +145,7 @@ func staticPrefixPieces(fullEntries []TranscriptEntry) []billingPiece {
 		}
 	}
 
-	if measured, ok := measuredBuiltinStatic(findCCVersion(fullEntries)); ok {
-		// Cold-start residual measured on THIS machine + version — more
-		// trustworthy than the hand-maintained table (can't split prompt
-		// vs schemas, so it's one entity).
-		add("static_overhead", "builtin_static", measured)
-	} else if consts, matched := ccBuiltinFor(findCCVersion(fullEntries)); matched != "" {
+	if consts, matched := ccBuiltinFor(findCCVersion(fullEntries)); matched != "" {
 		add("static_overhead", "system_prompt", consts.SystemPromptTokens)
 		add("static_overhead", "builtin_tool_schemas", consts.SystemToolsTokens)
 	}

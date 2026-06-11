@@ -47,7 +47,7 @@ const (
 )
 
 // ---------------------------------------------------------------------------
-// Persistent cache: { "<model>|<sha256>": tokens, "ccbuiltin|<version>": n }
+// Persistent cache: { "<model>|<sha256>": tokens }
 
 var (
 	tokCacheOnce sync.Once
@@ -132,15 +132,6 @@ func measuredOrEstimate(text, contentType string) int {
 		return v
 	}
 	return tokEstimateAs(text, contentType)
-}
-
-// measuredBuiltinStatic returns the measured system-prompt+builtin-schemas
-// residual for a CC version, when a cold-start measurement exists.
-func measuredBuiltinStatic(ccVersion string) (int, bool) {
-	if ccVersion == "" {
-		return 0, false
-	}
-	return tokenCacheGet("ccbuiltin|" + ccVersion)
 }
 
 // ---------------------------------------------------------------------------
@@ -414,62 +405,8 @@ func runTokenCountPass(entries []TranscriptEntry, budget int) int {
 	}
 
 	saveTokenCounts(updates)
-	deriveBuiltinResidual(entries)
 	debugLog("count_tokens: measured %d of %d misses (budget %d)", len(updates), len(misses), budget)
 	return spent
-}
-
-// deriveBuiltinResidual computes the bundled system prompt + built-in tool
-// schema cost from the session's cache-cold FIRST call:
-//
-//	residual = call₁ (input + cache_read + cache_creation)
-//	         − Σ everything we can attribute at that point
-//
-// and stores it per CC version. Anchors sharpen the subtraction, so this
-// runs after the measurement pass. Skipped when the first call isn't cold
-// (resumed session) or the residual is implausible.
-func deriveBuiltinResidual(entries []TranscriptEntry) {
-	version := findCCVersion(entries)
-	if version == "" {
-		return
-	}
-	if _, ok := measuredBuiltinStatic(version); ok {
-		return
-	}
-	calls := llmCallsInTurn(entries, entries)
-	if len(calls) == 0 {
-		return
-	}
-	first := calls[0]
-	if first.read != 0 { // not cache-cold: prefix predates this transcript
-		return
-	}
-	total := float64(first.read + first.write + first.fresh)
-
-	setBillingModel(entries)
-	known := 0.0
-	for _, p := range conversationPieces(entries[:first.entryIdx], skillBodyNameBySHA(entries), toolUseNames(entries)) {
-		known += p.tokens
-	}
-	for _, p := range staticPrefixPieces(entries) {
-		// Exclude the table-derived builtin entities — that's what we're
-		// re-deriving.
-		if p.key.lane == "static_overhead" &&
-			(p.key.entity == "system_prompt" || p.key.entity == "builtin_tool_schemas") {
-			continue
-		}
-		known += p.tokens
-	}
-
-	residual := int(total - known)
-	// Sanity: the bundled block is some thousands of tokens, never tiny or
-	// most of the window.
-	if residual < 1_000 || float64(residual) > total*0.95 {
-		debugLog("count_tokens: builtin residual %d implausible (total %d) — not stored", residual, int(total))
-		return
-	}
-	saveTokenCounts(map[string]int{"ccbuiltin|" + version: residual})
-	debugLog("count_tokens: builtin static for %s measured at %d (call1 residual)", version, residual)
 }
 
 // ---------------------------------------------------------------------------

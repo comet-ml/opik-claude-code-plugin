@@ -110,39 +110,6 @@ func TestRunTokenCountPassBudgetAndBaseline(t *testing.T) {
 	_ = spent
 }
 
-func TestDeriveBuiltinResidualFromColdFirstCall(t *testing.T) {
-	resetTokenCache(t)
-
-	// Big enough that the residual stays under the 95%-of-total sanity cap.
-	prompt := strings.Repeat("hello there friend ", 120)
-	pTok := tokEstimateAs(prompt, "user_prompt")
-	// Cold first call: read=0; total input = prompt + 6,000 of bundled
-	// system prompt/schemas we can't see.
-	entries := []TranscriptEntry{userPromptEntry(prompt)}
-	call := assistantCall(t, "m1", &Usage{InputTokens: 100, CacheCreationInputTokens: pTok + 5_900, OutputTokens: 5},
-		Content{Type: "text", Text: "hi"})
-	entries = append(entries, call...)
-	entries[1].Version = "9.9.9" // unknown to the table — residual is the only source
-
-	deriveBuiltinResidual(entries)
-
-	got, ok := measuredBuiltinStatic("9.9.9")
-	if !ok {
-		t.Fatal("expected a stored residual")
-	}
-	want := 100 + pTok + 5_900 - pTok // total - known(prompt)
-	if got != want {
-		t.Errorf("residual = %d, want %d", got, want)
-	}
-
-	// And billing now uses it as the static_overhead definition piece.
-	snap := computeBillingSnapshot(entries, entries)
-	so := snap["lanes"].(map[string]interface{})["static_overhead"].(map[string]interface{})
-	if so["total"].(int) != want {
-		t.Errorf("static_overhead total = %d, want measured %d", so["total"], want)
-	}
-}
-
 func jsonReadFile(path string) ([]byte, error) {
 	return os.ReadFile(path)
 }
