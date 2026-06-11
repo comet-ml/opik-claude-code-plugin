@@ -21,6 +21,13 @@ type ccBuiltinConstants struct {
 	SystemPromptTokens        int
 	SystemToolsTokens         int
 	SystemToolsDeferredTokens int
+	// Components is the optional per-release itemization of the bundled
+	// block (identity/harness rules, memory instructions, tool policy,
+	// per-tool schemas, ...), produced by the calibration capture described
+	// in docs/builtin-calibration.md. When present it replaces the
+	// two-entity system_prompt/builtin_tool_schemas split in cc.billing.
+	// Component values must sum to SystemPromptTokens + SystemToolsTokens.
+	Components map[string]int
 }
 
 // ccBuiltinByVersion is a small versioned table — keys are exact CC

@@ -169,3 +169,94 @@ func TestBillingUnattributedAbsorbsUnknownMass(t *testing.T) {
 		t.Errorf("unattributed total = %d, want 5000", row["total"])
 	}
 }
+
+func TestStaticOverheadItemization(t *testing.T) {
+	resetTokenCache(t)
+
+	// Unknown components: env carve-out + core remainder, conserving the
+	// table's system_prompt total.
+	ccBuiltinByVersion["8.8.8"] = ccBuiltinConstants{SystemPromptTokens: 4000, SystemToolsTokens: 900}
+	defer delete(ccBuiltinByVersion, "8.8.8")
+
+	entries := []TranscriptEntry{userPromptEntry("hi")}
+	call := assistantCall(t, "m1", &Usage{InputTokens: 10_000, OutputTokens: 5},
+		Content{Type: "text", Text: "yo"})
+	entries = append(entries, call...)
+	entries[1].Version = "8.8.8"
+
+	snap := computeBillingSnapshot(entries, entries)
+	so := snap["lanes"].(map[string]interface{})["static_overhead"].(map[string]interface{})
+	byName := map[string]int{}
+	for _, it := range so["items"].([]map[string]interface{}) {
+		byName[it["name"].(string)] = it["total"].(int)
+	}
+	if byName["builtin_tool_schemas"] == 0 {
+		t.Errorf("missing builtin_tool_schemas item: %v", byName)
+	}
+	// env + core must conserve the prompt constant (env may be 0 in a
+	// temp-dir cwd, in which case core carries it all).
+	if got := byName["environment"] + byName["core_prompt"]; got != 4000 {
+		t.Errorf("environment+core_prompt = %d, want 4000", got)
+	}
+
+	// With a calibrated Components table, items follow it instead.
+	ccBuiltinByVersion["8.8.8"] = ccBuiltinConstants{
+		SystemPromptTokens: 4000, SystemToolsTokens: 900,
+		Components: map[string]int{
+			"identity_and_rules": 2100, "memory_instructions": 800,
+			"environment_template": 200, "session_guidance": 900,
+			"builtin_tool_schemas": 900,
+		},
+	}
+	snap = computeBillingSnapshot(entries, entries)
+	so = snap["lanes"].(map[string]interface{})["static_overhead"].(map[string]interface{})
+	if so["total"].(int) != 4900 {
+		t.Errorf("components total = %d, want 4900", so["total"])
+	}
+	if len(so["items"].([]map[string]interface{})) != 5 {
+		t.Errorf("want 5 component items, got %v", so["items"])
+	}
+}
+
+func TestDeferredCatalogSplitsBuiltinFromMcp(t *testing.T) {
+	resetTokenCache(t)
+
+	delta := TranscriptEntry{Type: "attachment", Attachment: &Attachment{
+		Type:       "deferred_tools_delta",
+		AddedNames: []string{"WebSearch", "mcp__slack__send", "Monitor"},
+		AddedLines: []string{
+			"WebSearch: search the web for things and stuff",
+			"mcp__slack__send: send a slack message to a channel",
+			"Monitor: watch a long-running script for events",
+		},
+	}}
+	entries := []TranscriptEntry{userPromptEntry("hi"), delta}
+	entries = append(entries, assistantCall(t, "m1", &Usage{InputTokens: 5_000, OutputTokens: 5},
+		Content{Type: "text", Text: "ok"})...)
+
+	snap := computeBillingSnapshot(entries, entries)
+	lanes := snap["lanes"].(map[string]interface{})
+	soItems := lanes["static_overhead"].(map[string]interface{})["items"].([]map[string]interface{})
+	foundBuiltin := false
+	for _, it := range soItems {
+		if it["name"] == "deferred_tool_names" && it["total"].(int) > 0 {
+			foundBuiltin = true
+		}
+	}
+	if !foundBuiltin {
+		t.Errorf("expected deferred_tool_names under static_overhead: %v", soItems)
+	}
+	mcp, ok := lanes["mcp_servers"].(map[string]interface{})
+	if !ok {
+		t.Fatal("expected mcp_servers lane")
+	}
+	foundMcp := false
+	for _, it := range mcp["items"].([]map[string]interface{}) {
+		if it["name"] == "catalog_deltas" && it["total"].(int) > 0 {
+			foundMcp = true
+		}
+	}
+	if !foundMcp {
+		t.Errorf("expected catalog_deltas under mcp_servers: %v", mcp["items"])
+	}
+}

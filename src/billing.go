@@ -146,8 +146,33 @@ func staticPrefixPieces(fullEntries []TranscriptEntry) []billingPiece {
 	}
 
 	if consts, matched := ccBuiltinFor(findCCVersion(fullEntries)); matched != "" {
-		add("static_overhead", "system_prompt", consts.SystemPromptTokens)
-		add("static_overhead", "builtin_tool_schemas", consts.SystemToolsTokens)
+		if len(consts.Components) > 0 {
+			// Per-release itemization from the calibration capture
+			// (docs/builtin-calibration.md).
+			names := make([]string, 0, len(consts.Components))
+			for name := range consts.Components {
+				names = append(names, name)
+			}
+			sort.Strings(names)
+			for _, name := range names {
+				add("static_overhead", name, consts.Components[name])
+			}
+		} else {
+			// Tier-1 itemization: the environment block (cwd, platform, git
+			// status snapshot) is dynamic but locally reconstructible —
+			// carve it out of the bundled prompt so it shows as its own
+			// item; the rest stays the per-version core estimate.
+			envTokens := 0
+			if envText := environmentBlockText(); envText != "" {
+				envTokens = measuredOrEstimate(envText, "prose")
+				if max := consts.SystemPromptTokens / 2; envTokens > max {
+					envTokens = max // clamp: env can't dominate the prompt
+				}
+				add("static_overhead", "environment", envTokens)
+			}
+			add("static_overhead", "core_prompt", consts.SystemPromptTokens-envTokens)
+			add("static_overhead", "builtin_tool_schemas", consts.SystemToolsTokens)
+		}
 	}
 	if m := extractMemorySnapshot(); m != nil {
 		for _, f := range m["files"].([]map[string]interface{}) {
@@ -255,12 +280,30 @@ func conversationPieces(entries []TranscriptEntry, skillBodyNames map[string]str
 					add("file_attachments", ext, kindUsage, float64(tokEstimate(w.File.Content)), false)
 				}
 			case "deferred_tools_delta":
-				payload := strings.Join(e.Attachment.AddedLines, "\n")
-				if payload == "" {
-					payload = strings.Join(e.Attachment.AddedNames, "\n")
+				// The deferred catalog mixes built-in tool names with MCP
+				// ones — split so each lands in its lane (built-in names are
+				// part of Claude Code's own overhead, not MCP rent).
+				lines := e.Attachment.AddedLines
+				names := e.Attachment.AddedNames
+				if len(lines) != len(names) {
+					lines = names // fall back to names-only sizing
 				}
+				var builtinPayload, mcpPayload []string
+				for i, name := range names {
+					line := name
+					if i < len(lines) {
+						line = lines[i]
+					}
+					if strings.HasPrefix(name, "mcp__") {
+						mcpPayload = append(mcpPayload, line)
+					} else {
+						builtinPayload = append(builtinPayload, line)
+					}
+				}
+				add("static_overhead", "deferred_tool_names", kindDefinition,
+					float64(measuredOrEstimate(strings.Join(builtinPayload, "\n"), "deferred_tools_payload")), false)
 				add("mcp_servers", "catalog_deltas", kindDefinition,
-					float64(tokEstimateAs(payload, "deferred_tools_payload")), false)
+					float64(measuredOrEstimate(strings.Join(mcpPayload, "\n"), "deferred_tools_payload")), false)
 			case "mcp_instructions_delta":
 				// Per-server when the parallel arrays line up.
 				if len(e.Attachment.AddedNames) == len(e.Attachment.AddedBlocks) && len(e.Attachment.AddedNames) > 0 {

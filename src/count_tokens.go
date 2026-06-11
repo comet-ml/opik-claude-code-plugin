@@ -324,6 +324,11 @@ func anchorCandidates(entries []TranscriptEntry) []anchorCandidate {
 		}
 	}
 
+	// The reconstructed environment block — changes per session (git
+	// status), so it mostly rides the ratio estimate, but stable repos
+	// get anchored.
+	add(environmentBlockText(), "prose")
+
 	// On-disk config content: memory files + agent files.
 	if m := extractMemorySnapshot(); m != nil {
 		for _, f := range m["files"].([]map[string]interface{}) {
