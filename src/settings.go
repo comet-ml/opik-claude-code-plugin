@@ -20,11 +20,11 @@ import (
 //
 // Resolution order (Claude Code's documented layering — later wins):
 //
-//   1. Managed (org-pushed)         OS-specific (see managedSettingsPaths)
-//   2. User                         ~/.claude/settings.json
-//   3. User local                   ~/.claude/settings.local.json
-//   4. Project                      <cwd>/.claude/settings.json
-//   5. Project local                <cwd>/.claude/settings.local.json
+//  1. Managed (org-pushed)         OS-specific (see managedSettingsPaths)
+//  2. User                         ~/.claude/settings.json
+//  3. User local                   ~/.claude/settings.local.json
+//  4. Project                      <cwd>/.claude/settings.json
+//  5. Project local                <cwd>/.claude/settings.local.json
 //
 // A plugin counts as enabled iff the merged map's value is true (boolean
 // or "true"/"1" string). Anything else — including unset, false, or an

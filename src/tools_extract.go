@@ -95,9 +95,9 @@ func extractToolsSnapshot(entries []TranscriptEntry) map[string]interface{} {
 	}
 	var avail []toolEntry
 	builtinCount, mcpCount := 0, 0
-	serverTools := map[string][]string{}    // server → tool names
-	serverLines := map[string]string{}      // server → joined description lines
-	builtinLines, mcpLines := "", ""        // sources → joined lines
+	serverTools := map[string][]string{} // server → tool names
+	serverLines := map[string]string{}   // server → joined description lines
+	builtinLines, mcpLines := "", ""     // sources → joined lines
 
 	for name, line := range available {
 		// SplitN("__", 3) — assumes server names contain no `__`. Tool
@@ -156,12 +156,12 @@ func extractToolsSnapshot(entries []TranscriptEntry) map[string]interface{} {
 		mcpInstructionsTokensTotal += instrTokens
 		mcpEstimatedSchemaTokensTotal += estSchema
 		byServer = append(byServer, map[string]interface{}{
-			"server":                    server,
-			"tool_count":                len(tools),
-			"schema_tokens":             tokEstimateAs(serverLines[server], "deferred_tools_payload"),
-			"instructions_tokens":       instrTokens,
-			"estimated_schema_tokens":   estSchema,
-			"estimated_total_tokens":    instrTokens + estSchema,
+			"server":                  server,
+			"tool_count":              len(tools),
+			"schema_tokens":           tokEstimateAs(serverLines[server], "deferred_tools_payload"),
+			"instructions_tokens":     instrTokens,
+			"estimated_schema_tokens": estSchema,
+			"estimated_total_tokens":  instrTokens + estSchema,
 		})
 	}
 	sort.Slice(byServer, func(i, j int) bool {
@@ -191,18 +191,18 @@ func extractToolsSnapshot(entries []TranscriptEntry) map[string]interface{} {
 				"schema_tokens":   builtinSchemaTokens,
 			},
 			"mcp": map[string]interface{}{
-				"available_count":             mcpCount,
-				"schema_tokens":               mcpSchemaTokens,
-				"instructions_tokens":         mcpInstructionsTokensTotal,
-				"estimated_schema_tokens":     mcpEstimatedSchemaTokensTotal,
+				"available_count":         mcpCount,
+				"schema_tokens":           mcpSchemaTokens,
+				"instructions_tokens":     mcpInstructionsTokensTotal,
+				"estimated_schema_tokens": mcpEstimatedSchemaTokensTotal,
 				// estimated_deferred_tokens is the closest equivalent to
 				// /context's "MCP tools (deferred)" row — addedLines we saw
 				// + estimated full-schema overhead per tool. The
 				// instructions block lives at by_source.mcp.instructions_tokens
 				// because /context buckets it under "System tools (deferred)"
 				// on some CC versions; surfacing both lets the FE pick.
-				"estimated_deferred_tokens":   mcpSchemaTokens + mcpEstimatedSchemaTokensTotal,
-				"estimated":                   mcpCount > 0,
+				"estimated_deferred_tokens": mcpSchemaTokens + mcpEstimatedSchemaTokensTotal,
+				"estimated":                 mcpCount > 0,
 			},
 		},
 		"by_server": byServer,

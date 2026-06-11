@@ -34,7 +34,7 @@ type pluginCatalogTokens struct {
 }
 
 type pluginCatalogComponent struct {
-	Name  string `json:"name"`
+	Name  string              `json:"name"`
 	Chars pluginCatalogTokens `json:"chars"`
 }
 

@@ -25,8 +25,8 @@ type HookInput struct {
 	Prompt              string `json:"prompt"`
 	AgentID             string `json:"agent_id"`
 	AgentType           string `json:"agent_type"`
-	AgentTranscriptPath  string `json:"agent_transcript_path"`
-	CustomInstructions   string `json:"custom_instructions"`
+	AgentTranscriptPath string `json:"agent_transcript_path"`
+	CustomInstructions  string `json:"custom_instructions"`
 }
 
 var (
@@ -49,6 +49,14 @@ func main() {
 	// background subprocess to ask claude `/context` and PATCH the result
 	// onto the trace. This path never reads stdin; it shells out to claude
 	// and exits.
+	// Detached token-count mode: measure exact token counts for anchor
+	// candidates via the free count_tokens endpoint and persist them for
+	// the next flush (see count_tokens.go).
+	if os.Getenv("OPIK_CC_TOKEN_COUNT") == "1" {
+		runTokenCountMode()
+		os.Exit(0)
+	}
+
 	if os.Getenv("OPIK_CC_CONTEXT_FETCH") == "1" {
 		var err error
 		config, err = LoadConfig()
@@ -232,6 +240,9 @@ func onStop() {
 	// claude binary can't break tracing.
 	if err := spawnDetachedContextFetch(state.SessionID, state.TraceID, state.Cwd); err != nil {
 		debugLog("spawn context fetch: %v", err)
+	}
+	if err := spawnDetachedTokenCount(state.SessionID); err != nil {
+		debugLog("spawn token count: %v", err)
 	}
 
 	debugLog("done")
@@ -727,12 +738,12 @@ func processTranscriptEntries(traceID string, entries []TranscriptEntry, parentS
 
 		if p.Usage != nil && span.Usage == nil {
 			span.Usage = map[string]int{
-				"prompt_tokens":     p.Usage.InputTokens,
-				"completion_tokens": p.Usage.OutputTokens,
-				"total_tokens":      p.Usage.InputTokens + p.Usage.OutputTokens,
-				"original_usage.input_tokens":               p.Usage.InputTokens,
-				"original_usage.output_tokens":              p.Usage.OutputTokens,
-				"original_usage.cache_read_input_tokens":    p.Usage.CacheReadInputTokens,
+				"prompt_tokens":                              p.Usage.InputTokens,
+				"completion_tokens":                          p.Usage.OutputTokens,
+				"total_tokens":                               p.Usage.InputTokens + p.Usage.OutputTokens,
+				"original_usage.input_tokens":                p.Usage.InputTokens,
+				"original_usage.output_tokens":               p.Usage.OutputTokens,
+				"original_usage.cache_read_input_tokens":     p.Usage.CacheReadInputTokens,
 				"original_usage.cache_creation_input_tokens": p.Usage.CacheCreationInputTokens,
 			}
 			span.Provider = "anthropic"
@@ -747,34 +758,25 @@ func processTranscriptEntries(traceID string, entries []TranscriptEntry, parentS
 	return spans
 }
 
-// domainSnapshotsFromEntries returns every per-domain snapshot keyed by
+// domainSnapshotsFromEntries returns the per-domain snapshots keyed by
 // domain name. Called by postTraceMetrics for the trace-level write and
-// by dryrun_test for offline validation. The parsed+deduped slice is
-// computed once and passed to the few extractors that need it
-// (extractThinkingSnapshot), avoiding redundant work.
+// by dryrun_test for offline validation.
 func domainSnapshotsFromEntries(fullEntries, turnEntries []TranscriptEntry) map[string]map[string]interface{} {
-	parsedTurn := ParseAssistantMessages(turnEntries)
-	DeduplicateUsage(parsedTurn)
-
 	return map[string]map[string]interface{}{
-		"skills":           BuildSkillsSnapshot(fullEntries),
-		"tools":            extractToolsSnapshot(fullEntries),
-		"memory":           extractMemorySnapshot(),
-		"agents":           extractAgentsSnapshot(),
-		"thinking":         extractThinkingSnapshot(turnEntries, parsedTurn),
-		"tool_results":     extractToolResultsSnapshot(turnEntries),
-		"user_prompts":     extractUserPromptsSnapshot(turnEntries),
-		"file_attachments": extractFileAttachmentsSnapshot(turnEntries),
-		"prior_assistant":  extractPriorAssistantSnapshot(fullEntries, turnEntries),
-		"assistant_text":   extractAssistantTextSnapshot(turnEntries),
-		"output_tokens":    extractOutputTokensSnapshot(turnEntries, parsedTurn),
+		// The product schema: per-call positional cache-tier attribution.
+		// Tier tokens are per-call billing events — additive across traces
+		// and exactly reconciled to API usage (see billing.go). Every UI
+		// lane value, breakdown item, stacked definition/usage segment and
+		// count comes from this block.
+		"billing": computeBillingSnapshot(fullEntries, turnEntries),
 		// cc_builtin covers the bundled system-prompt + tool-catalog cost
 		// /context reports under "System prompt" / "System tools" /
 		// "System tools (deferred)". These never appear in the transcript
 		// (the binary holds the schemas internally), so values are
 		// version-keyed approximations — marked `estimated: true` in the
-		// payload so the FE can render them as such.
-		"cc_builtin":       extractCCBuiltinSnapshot(fullEntries),
+		// payload so the FE can render them as such. Kept for the Static
+		// overhead disclaimer and calibration diagnostics.
+		"cc_builtin": extractCCBuiltinSnapshot(fullEntries),
 	}
 }
 
@@ -1068,4 +1070,3 @@ func debugLog(format string, args ...interface{}) {
 	fmt.Fprintf(f, "[%s] ", ts)
 	fmt.Fprintf(f, format+"\n", args...)
 }
-

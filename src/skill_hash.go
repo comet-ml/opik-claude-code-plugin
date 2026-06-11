@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -169,32 +170,24 @@ func extractLoadedSkills(entries []TranscriptEntry) []SkillEvent {
 	if len(loads) == 0 {
 		return nil
 	}
-	// Latest-wins per skill name (mirrors how the model sees the most
-	// recent body). FirstSeenIdx tracks the first appearance for ordering
-	// stability across the FE.
-	firstIdx := map[string]int{}
-	latest := map[string]loadedSkillBody{}
-	order := []string{}
+	// One event per load (OPIK-6873): repeat loads of the same skill each
+	// inject their body into context and each replays from then on, so
+	// collapsing to latest-wins under-counted both tokens and load counts.
+	// Every event carries a stable unique ToolUseID (toolu_… or
+	// "slash:<idx>") so consumers can dedupe events across the cumulative
+	// per-trace loaded[] arrays.
+	out := make([]SkillEvent, 0, len(loads))
 	for _, l := range loads {
-		if _, ok := firstIdx[l.Name]; !ok {
-			firstIdx[l.Name] = l.Index
-			order = append(order, l.Name)
-		}
-		latest[l.Name] = l
-	}
-	out := make([]SkillEvent, 0, len(order))
-	for _, name := range order {
-		l := latest[name]
-		path, _ := resolveSkillBody(name)
+		path, _ := resolveSkillBody(l.Name)
 		source := "bundled"
 		if path != "" {
 			source = "listing"
 		}
 		ev := SkillEvent{
-			Name:         name,
+			Name:         l.Name,
 			SHA256:       sha256hex(l.Body),
 			BodyTokens:   tokEstimateAs(l.Body, "skill_body"),
-			FirstSeenIdx: firstIdx[name],
+			FirstSeenIdx: l.Index,
 			Source:       source,
 			Path:         path,
 			ToolUseID:    l.ToolUseID,
@@ -205,7 +198,7 @@ func extractLoadedSkills(entries []TranscriptEntry) []SkillEvent {
 		// cross-check — CC's own tokenizer produced that number when it
 		// built the cache, so it's a tighter signal than our 3.5 ratio
 		// for skills with rich code blocks or markdown tables.
-		if pluginShort, leaf, ok := splitNamespacedSkillName(name); ok {
+		if pluginShort, leaf, ok := splitNamespacedSkillName(l.Name); ok {
 			home, _ := os.UserHomeDir()
 			model := mostRecentModelFromEntries(entries)
 			if comp, fullKey, hit := pluginCatalogLookup(home, pluginShort, "skill", leaf); hit {
@@ -249,8 +242,9 @@ func mostRecentModelFromEntries(entries []TranscriptEntry) string {
 
 // loadedSkillBody is one resolved skill load. Index is the transcript entry
 // index of the user message that carried the body — used by FirstSeenIdx
-// in extractLoadedSkills for stable ordering. ToolUseID is populated for
-// Skill-tool-use loads, empty for slash-command loads.
+// in extractLoadedSkills for stable ordering. ToolUseID is the toolu_… id
+// for Skill-tool-use loads and a synthetic "slash:<entry index>" id for
+// slash-command loads, so every load event has a stable unique identity.
 type loadedSkillBody struct {
 	Name      string
 	Body      string
@@ -411,9 +405,16 @@ func slashCommandSkillLoads(entries []TranscriptEntry) []loadedSkillBody {
 			}
 			if strings.HasPrefix(c.Text, slashCommandPrefix) {
 				out = append(out, loadedSkillBody{
-					Name:  pendingName,
-					Body:  c.Text,
-					Index: i,
+					Name: pendingName,
+					Body: c.Text,
+					// Synthetic load id (OPIK-6873): slash loads have no
+					// tool_use, but consumers dedupe load events across the
+					// cumulative per-trace loaded[] arrays via this id.
+					// The transcript entry index is stable for the session
+					// (append-only file), so the same load keeps the same
+					// id on every later trace.
+					ToolUseID: "slash:" + strconv.Itoa(i),
+					Index:     i,
 				})
 			}
 			// Whether we matched a body or saw an unrelated text block,

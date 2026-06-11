@@ -10,10 +10,10 @@ import (
 //
 //   - SystemPromptTokens         the bundled default system prompt
 //   - SystemToolsTokens          full JSON schemas for the default tools
-//                                (Read, Edit, Bash, …) — not the names alone
+//     (Read, Edit, Bash, …) — not the names alone
 //   - SystemToolsDeferredTokens  the catalog of deferred tool definitions
-//                                (Cron*, Task*, Web*, Monitor, …) plus any
-//                                schemas Claude Code injects on demand
+//     (Cron*, Task*, Web*, Monitor, …) plus any
+//     schemas Claude Code injects on demand
 //
 // These are taken from `/context` for a known CC version. They drift with
 // each binary release, so the table below should grow over time.
@@ -21,6 +21,13 @@ type ccBuiltinConstants struct {
 	SystemPromptTokens        int
 	SystemToolsTokens         int
 	SystemToolsDeferredTokens int
+	// Components is the optional per-release itemization of the bundled
+	// block (identity/harness rules, memory instructions, tool policy,
+	// per-tool schemas, ...), produced by the calibration capture described
+	// in docs/builtin-calibration.md. When present it replaces the
+	// two-entity system_prompt/builtin_tool_schemas split in cc.billing.
+	// Component values must sum to SystemPromptTokens + SystemToolsTokens.
+	Components map[string]int
 }
 
 // ccBuiltinByVersion is a small versioned table — keys are exact CC
@@ -36,6 +43,14 @@ var ccBuiltinByVersion = map[string]ccBuiltinConstants{
 		SystemPromptTokens:        8000,
 		SystemToolsTokens:         17600,
 		SystemToolsDeferredTokens: 19200,
+	},
+	// 2.1.173 moved most of the built-in tool catalog behind deferral:
+	// always-on schemas dropped 17.6k → 1.1k. Captured from /context on
+	// 2.1.173 + Fable (cc.context_runtime cross-check, OPIK-6873 audit).
+	"2.1.173": {
+		SystemPromptTokens:        4800,
+		SystemToolsTokens:         1100,
+		SystemToolsDeferredTokens: 11300,
 	},
 }
 
