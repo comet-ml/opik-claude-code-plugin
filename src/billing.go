@@ -71,8 +71,15 @@ func computeBillingSnapshot(fullEntries, turnEntries []TranscriptEntry) map[stri
 	acc := map[billingKey]*billingTier{}
 	totals := billingTier{}
 	for _, call := range calls {
+		// After a compaction the request no longer contains the pre-compact
+		// conversation — only the summary entry and what follows. Replaying
+		// from the start would lay out content that isn't in the request,
+		// and the (usage-derived, never-rescaled) assistant pieces would
+		// overflow the positional cut into the fresh-input tier.
+		history := fullEntries[:call.entryIdx]
+		history = history[compactReplayStart(history):]
 		pieces := append(append([]billingPiece{}, staticPieces...),
-			conversationPieces(fullEntries[:call.entryIdx], skillBodyNames, toolNames)...)
+			conversationPieces(history, skillBodyNames, toolNames)...)
 		pieces = reconcileToUsage(pieces, float64(call.read+call.write+call.fresh))
 		cutByPosition(pieces, float64(call.read), float64(call.write), acc)
 
@@ -85,6 +92,22 @@ func computeBillingSnapshot(fullEntries, turnEntries []TranscriptEntry) map[stri
 	}
 
 	return renderBillingSnapshot(len(calls), totals, acc, counts)
+}
+
+// compactReplayStart returns the index in entries where the live request
+// content begins: the entry AFTER the last compact boundary (the summary
+// user entry itself is in the request, so it is included). 0 when the
+// session has never compacted.
+func compactReplayStart(entries []TranscriptEntry) int {
+	start := 0
+	for i, e := range entries {
+		if e.Type == "system" && e.Subtype == "compact_boundary" {
+			start = i + 1
+		} else if e.IsCompactSummary {
+			start = i
+		}
+	}
+	return start
 }
 
 type billingCall struct {
@@ -226,6 +249,17 @@ func conversationPieces(entries []TranscriptEntry, skillBodyNames map[string]str
 			if e.Message == nil {
 				continue
 			}
+			if e.IsCompactSummary {
+				// The summary stands in for the compacted conversation — it
+				// is session-length cost, not something the user typed.
+				for _, c := range e.Message.Content {
+					if c.Type == "text" {
+						add("prior_assistant", "compact_summary", kindUsage,
+							float64(measuredOrEstimate(c.Text, "prose")), false)
+					}
+				}
+				continue
+			}
 			for _, c := range e.Message.Content {
 				switch c.Type {
 				case "text":
@@ -359,9 +393,13 @@ func toolLane(name string) (string, string) {
 	}
 }
 
-// reconcileToUsage makes Σ pieces == total exactly. Overshoot shrinks only
-// the estimated pieces (usage-derived ones are already exact); undershoot
-// appends the explicit `unattributed` tail piece.
+// reconcileToUsage makes Σ pieces == total exactly. Overshoot shrinks the
+// estimated pieces first (usage-derived ones are normally already exact);
+// if the usage-derived pieces alone still exceed the measured total — the
+// request dropped content we can't see (compaction we failed to detect,
+// context editing) — they are scaled down too: the per-call exactness
+// contract outranks per-piece exactness. Undershoot appends the explicit
+// `unattributed` tail piece.
 func reconcileToUsage(pieces []billingPiece, total float64) []billingPiece {
 	sum, estSum := 0.0, 0.0
 	for _, p := range pieces {
@@ -370,16 +408,27 @@ func reconcileToUsage(pieces []billingPiece, total float64) []billingPiece {
 			estSum += p.tokens
 		}
 	}
+	exactSum := sum - estSum
 	switch {
-	case sum > total && estSum > 0:
-		target := total - (sum - estSum)
-		if target < 0 {
-			target = 0
+	case sum > total:
+		if estSum > 0 {
+			target := total - exactSum
+			if target < 0 {
+				target = 0
+			}
+			scale := target / estSum
+			for i := range pieces {
+				if !pieces[i].exact {
+					pieces[i].tokens *= scale
+				}
+			}
 		}
-		scale := target / estSum
-		for i := range pieces {
-			if !pieces[i].exact {
-				pieces[i].tokens *= scale
+		if exactSum > total {
+			scale := total / exactSum
+			for i := range pieces {
+				if pieces[i].exact {
+					pieces[i].tokens *= scale
+				}
 			}
 		}
 	case sum < total:
@@ -447,7 +496,7 @@ func countNewEvents(turnEntries []TranscriptEntry, skillBodyNames map[string]str
 	for _, e := range turnEntries {
 		switch e.Type {
 		case "user":
-			if e.Message == nil {
+			if e.Message == nil || e.IsCompactSummary {
 				continue
 			}
 			for _, c := range e.Message.Content {
