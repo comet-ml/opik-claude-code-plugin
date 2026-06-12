@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"strconv"
@@ -236,6 +237,7 @@ func postTraceMetrics(state *State) {
 	}
 
 	mergeMetadataCC(state.TraceID, metrics)
+	postReconciliationScore(state.TraceID, metrics["billing"])
 
 	var files, authored, overwritten int
 	if agg != nil {
@@ -292,4 +294,42 @@ func inferCwd() string {
 		return d
 	}
 	return ""
+}
+
+// postReconciliationScore mirrors cc.billing.reconciliation as a trace
+// feedback score so inconsistent traces are filterable in the UI:
+// token_count_consistent = 1 when Σ lanes == API usage on every tier
+// column, 0 otherwise (the per-column deltas land in the reason).
+func postReconciliationScore(traceID string, billing interface{}) {
+	snap, ok := billing.(map[string]interface{})
+	if !ok {
+		return
+	}
+	recon, ok := snap["reconciliation"].(map[string]interface{})
+	if !ok {
+		return
+	}
+
+	value := 0.0
+	if consistent, _ := recon["consistent"].(bool); consistent {
+		value = 1.0
+	}
+	score := map[string]interface{}{
+		"id":     traceID,
+		"name":   "token_count_consistent",
+		"value":  value,
+		"source": "sdk",
+	}
+	if value == 0 {
+		score["reason"] = fmt.Sprintf(
+			"Σ lanes minus API usage: input %+d, cache_read %+d, cache_creation %+d, output %+d",
+			recon["input_delta"], recon["cache_read_delta"],
+			recon["cache_creation_delta"], recon["output_delta"])
+	}
+
+	if err := api.Put("/traces/feedback-scores", map[string]interface{}{
+		"scores": []interface{}{score},
+	}); err != nil {
+		debugLog("post reconciliation score: %v", err)
+	}
 }

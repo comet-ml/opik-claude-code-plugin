@@ -332,41 +332,39 @@ func TestBillingCompactBoundaryTruncatesReplay(t *testing.T) {
 	}
 }
 
-// Safety net: when usage-derived replay pieces alone exceed the call's
-// measured prompt (undetected truncation), they must be scaled down so the
-// per-call exactness contract still holds — the overshoot must never land
-// in the fresh-input tier.
-func TestBillingExactOvershootIsClamped(t *testing.T) {
-	entries := []TranscriptEntry{userPromptEntry("hi")}
-	entries = append(entries, assistantCall(t, "m1",
-		&Usage{InputTokens: 20, OutputTokens: 50_000},
+// cc.billing.reconciliation reports Σ lanes minus usage per tier column —
+// the monitorable health flag. Healthy attribution reconciles to zero;
+// when usage-derived pieces exceed the billed prompt (a truncation we
+// don't detect), consistent flips false and the input delta is positive.
+func TestBillingReconciliationFlag(t *testing.T) {
+	u1 := &Usage{InputTokens: 900, CacheCreationInputTokens: 30_000, OutputTokens: 250}
+	entries := []TranscriptEntry{userPromptEntry("please do the thing")}
+	entries = append(entries, assistantCall(t, "m1", u1,
+		Content{Type: "text", Text: strings.Repeat("plan ", 40)})...)
+
+	snap := computeBillingSnapshot(entries, entries)
+	recon := snap["reconciliation"].(map[string]interface{})
+	if !recon["consistent"].(bool) {
+		t.Errorf("healthy turn must reconcile, got %v", recon)
+	}
+
+	// Now an undetected truncation: a 50k-output call (thinking carries the
+	// usage-derived mass) replayed against a tiny billed prompt.
+	big := &Usage{InputTokens: 900, CacheCreationInputTokens: 30_000, OutputTokens: 50_000}
+	entries = []TranscriptEntry{userPromptEntry("please do the thing")}
+	entries = append(entries, assistantCall(t, "m1", big,
 		Content{Type: "thinking", Thinking: "redacted"},
-		Content{Type: "text", Text: "done"},
-	)...)
+		Content{Type: "text", Text: "done"})...)
 	u2 := &Usage{InputTokens: 40, CacheReadInputTokens: 1_000, OutputTokens: 10}
 	entries = append(entries, assistantCall(t, "m2", u2, Content{Type: "text", Text: "ok"})...)
 
-	snap := computeBillingSnapshot(entries, entries)
-	if snap == nil {
-		t.Fatal("expected billing snapshot")
+	snap = computeBillingSnapshot(entries, entries)
+	recon = snap["reconciliation"].(map[string]interface{})
+	if recon["consistent"].(bool) {
+		t.Fatalf("exact overshoot must flip consistent=false, got %v", recon)
 	}
-
-	wantRead := u2.CacheReadInputTokens
-	wantFresh := 20 + u2.InputTokens
-	wantOut := 50_000 + u2.OutputTokens
-
-	read, write, fresh, output, rows := billingColumnSums(snap)
-	closeEnough := func(got, want int) bool {
-		d := got - want
-		if d < 0 {
-			d = -d
-		}
-		return d <= rows
-	}
-	if !closeEnough(read, wantRead) || !closeEnough(write, 0) ||
-		!closeEnough(fresh, wantFresh) || !closeEnough(output, wantOut) {
-		t.Errorf("Σ lanes = read %d / write %d / fresh %d / output %d, want %d/0/%d/%d (±%d)",
-			read, write, fresh, output, wantRead, wantFresh, wantOut, rows)
+	if recon["input_delta"].(int) <= 0 {
+		t.Errorf("overshoot must surface as positive input_delta, got %v", recon)
 	}
 }
 
