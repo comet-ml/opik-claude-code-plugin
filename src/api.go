@@ -14,10 +14,19 @@ type API struct {
 	client *http.Client
 }
 
+const (
+	foregroundAPITimeout = 2 * time.Second
+	backgroundAPITimeout = 30 * time.Second
+)
+
 func NewAPI(cfg *Config) *API {
+	return NewAPIWithTimeout(cfg, foregroundAPITimeout)
+}
+
+func NewAPIWithTimeout(cfg *Config, timeout time.Duration) *API {
 	return &API{
 		config: cfg,
-		client: &http.Client{Timeout: 30 * time.Second},
+		client: &http.Client{Timeout: timeout},
 	}
 }
 

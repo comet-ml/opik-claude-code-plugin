@@ -63,7 +63,7 @@ func main() {
 		if err != nil || config == nil {
 			os.Exit(0)
 		}
-		api = NewAPI(config)
+		api = NewAPIWithTimeout(config, backgroundAPITimeout)
 		runContextFetchMode()
 		os.Exit(0)
 	}
