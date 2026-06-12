@@ -120,6 +120,12 @@ type billingCall struct {
 // with usage and the message's contiguous entry span within fullEntries.
 // The transcript repeats the same usage on every entry of a multi-block
 // message, so usage is taken once from the first entry seen.
+//
+// All-zero usage means the API never billed the call. Claude Code writes
+// such entries locally (`model:"<synthetic>"`, isApiErrorMessage) when a
+// request errors or is interrupted; treating one as a real call reconciles
+// the full history layout against a zero-token prompt and dumps the
+// usage-derived pieces into the fresh-input tier as phantom tokens.
 func llmCallsInTurn(fullEntries, turnEntries []TranscriptEntry) []billingCall {
 	offset := len(fullEntries) - len(turnEntries)
 	var calls []billingCall
@@ -136,10 +142,10 @@ func llmCallsInTurn(fullEntries, turnEntries []TranscriptEntry) []billingCall {
 			calls[pos].entryEnd = offset + i + 1
 			continue
 		}
-		if e.Message.Usage == nil {
+		u := e.Message.Usage
+		if u == nil || u.InputTokens+u.CacheReadInputTokens+u.CacheCreationInputTokens+u.OutputTokens == 0 {
 			continue
 		}
-		u := e.Message.Usage
 		index[id] = len(calls)
 		calls = append(calls, billingCall{
 			entryIdx: offset + i,
