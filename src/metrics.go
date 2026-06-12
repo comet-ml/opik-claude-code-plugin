@@ -322,7 +322,7 @@ func postReconciliationScore(traceID string, billing interface{}) {
 			recon["cache_creation_delta"], recon["output_delta"])
 	}
 
-	if err := api.Put("/traces/feedback-scores", map[string]interface{}{
+	if err := api.Post("/traces/feedback-scores", map[string]interface{}{
 		"scores": []interface{}{score},
 	}); err != nil {
 		debugLog("post reconciliation score: %v", err)
