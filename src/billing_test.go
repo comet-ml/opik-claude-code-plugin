@@ -369,3 +369,54 @@ func TestBillingExactOvershootIsClamped(t *testing.T) {
 			read, write, fresh, output, wantRead, wantFresh, wantOut, rows)
 	}
 }
+
+// Claude Code writes locally fabricated assistant entries (model
+// "<synthetic>", isApiErrorMessage) with an all-zero usage object when an
+// API call errors. They were never billed: treating one as a real call
+// reconciles the whole history against a zero-token prompt and dumps the
+// usage-derived pieces into the fresh-input tier.
+func TestBillingSkipsSyntheticZeroUsageCalls(t *testing.T) {
+	u1 := &Usage{InputTokens: 100, CacheCreationInputTokens: 8_000, OutputTokens: 60_000}
+	entries := []TranscriptEntry{userPromptEntry("do the thing")}
+	entries = append(entries, assistantCall(t, "m1", u1,
+		Content{Type: "thinking", Thinking: "redacted"},
+		Content{Type: "text", Text: "working on it"},
+	)...)
+
+	// The synthetic error entry: zero usage, full history would be "its
+	// request" — must be ignored entirely.
+	entries = append(entries, assistantCall(t, "synthetic-1", &Usage{},
+		Content{Type: "text", Text: "API error: request interrupted"},
+	)...)
+
+	u2 := &Usage{InputTokens: 50, CacheReadInputTokens: 70_000,
+		CacheCreationInputTokens: 2_000, OutputTokens: 40}
+	entries = append(entries, assistantCall(t, "m2", u2, Content{Type: "text", Text: "done"})...)
+
+	snap := computeBillingSnapshot(entries, entries)
+	if snap == nil {
+		t.Fatal("expected billing snapshot")
+	}
+	if got := snap["llm_calls"].(int); got != 2 {
+		t.Fatalf("llm_calls = %d, want 2 (synthetic call must be skipped)", got)
+	}
+
+	wantRead := u1.CacheReadInputTokens + u2.CacheReadInputTokens
+	wantWrite := u1.CacheCreationInputTokens + u2.CacheCreationInputTokens
+	wantFresh := u1.InputTokens + u2.InputTokens
+	wantOut := u1.OutputTokens + u2.OutputTokens
+
+	read, write, fresh, output, rows := billingColumnSums(snap)
+	closeEnough := func(got, want int) bool {
+		d := got - want
+		if d < 0 {
+			d = -d
+		}
+		return d <= rows
+	}
+	if !closeEnough(read, wantRead) || !closeEnough(write, wantWrite) ||
+		!closeEnough(fresh, wantFresh) || !closeEnough(output, wantOut) {
+		t.Errorf("Σ lanes = read %d / write %d / fresh %d / output %d, want %d/%d/%d/%d (±%d)",
+			read, write, fresh, output, wantRead, wantWrite, wantFresh, wantOut, rows)
+	}
+}
