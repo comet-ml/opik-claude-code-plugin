@@ -239,12 +239,15 @@ func TestDeferredCatalogSplitsBuiltinFromMcp(t *testing.T) {
 	soItems := lanes["static_overhead"].(map[string]interface{})["items"].([]map[string]interface{})
 	foundBuiltin := false
 	for _, it := range soItems {
-		if it["name"] == "deferred_tool_names" && it["total"].(int) > 0 {
+		if it["name"] == "observed_builtin_schemas" && it["total"].(int) > 0 {
 			foundBuiltin = true
+		}
+		if it["name"] == "deferred_tool_names" {
+			t.Errorf("deferred tool delta should not be replayed separately: %v", soItems)
 		}
 	}
 	if !foundBuiltin {
-		t.Errorf("expected deferred_tool_names under static_overhead: %v", soItems)
+		t.Errorf("expected observed_builtin_schemas under static_overhead: %v", soItems)
 	}
 	mcp, ok := lanes["mcp_servers"].(map[string]interface{})
 	if !ok {
@@ -252,12 +255,15 @@ func TestDeferredCatalogSplitsBuiltinFromMcp(t *testing.T) {
 	}
 	foundMcp := false
 	for _, it := range mcp["items"].([]map[string]interface{}) {
-		if it["name"] == "catalog_deltas" && it["total"].(int) > 0 {
+		if it["name"] == "slack" && it["total"].(int) > 0 {
 			foundMcp = true
+		}
+		if it["name"] == "catalog_deltas" {
+			t.Errorf("MCP catalog delta should not be replayed separately: %v", mcp["items"])
 		}
 	}
 	if !foundMcp {
-		t.Errorf("expected catalog_deltas under mcp_servers: %v", mcp["items"])
+		t.Errorf("expected slack server under mcp_servers: %v", mcp["items"])
 	}
 }
 

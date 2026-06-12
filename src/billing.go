@@ -333,42 +333,6 @@ func conversationPieces(entries []TranscriptEntry, skillBodyNames map[string]str
 					}
 					add("file_attachments", ext, kindUsage, float64(tokEstimate(w.File.Content)), false)
 				}
-			case "deferred_tools_delta":
-				// The deferred catalog mixes built-in tool names with MCP
-				// ones — split so each lands in its lane (built-in names are
-				// part of Claude Code's own overhead, not MCP rent).
-				lines := e.Attachment.AddedLines
-				names := e.Attachment.AddedNames
-				if len(lines) != len(names) {
-					lines = names // fall back to names-only sizing
-				}
-				var builtinPayload, mcpPayload []string
-				for i, name := range names {
-					line := name
-					if i < len(lines) {
-						line = lines[i]
-					}
-					if strings.HasPrefix(name, "mcp__") {
-						mcpPayload = append(mcpPayload, line)
-					} else {
-						builtinPayload = append(builtinPayload, line)
-					}
-				}
-				add("static_overhead", "deferred_tool_names", kindDefinition,
-					float64(measuredOrEstimate(strings.Join(builtinPayload, "\n"), "deferred_tools_payload")), false)
-				add("mcp_servers", "catalog_deltas", kindDefinition,
-					float64(measuredOrEstimate(strings.Join(mcpPayload, "\n"), "deferred_tools_payload")), false)
-			case "mcp_instructions_delta":
-				// Per-server when the parallel arrays line up.
-				if len(e.Attachment.AddedNames) == len(e.Attachment.AddedBlocks) && len(e.Attachment.AddedNames) > 0 {
-					for i, name := range e.Attachment.AddedNames {
-						add("mcp_servers", name, kindDefinition,
-							float64(measuredOrEstimate(e.Attachment.AddedBlocks[i], "prose")), false)
-					}
-				} else {
-					add("mcp_servers", "instructions", kindDefinition,
-						float64(tokEstimateAs(strings.Join(e.Attachment.AddedBlocks, "\n"), "prose")), false)
-				}
 			}
 		case "assistant":
 			if e.Message == nil || len(e.Message.Content) == 0 {
