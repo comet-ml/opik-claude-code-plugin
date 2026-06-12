@@ -260,3 +260,112 @@ func TestDeferredCatalogSplitsBuiltinFromMcp(t *testing.T) {
 		t.Errorf("expected catalog_deltas under mcp_servers: %v", mcp["items"])
 	}
 }
+
+// After /compact the request contains only the summary + post-compact
+// entries. The replay must truncate at the boundary: pre-compact content
+// must not be laid out, and the summary lands in prior_assistant.
+func TestBillingCompactBoundaryTruncatesReplay(t *testing.T) {
+	preCompact := []TranscriptEntry{userPromptEntry("the original ask")}
+	// A huge pre-compact call: its blocks are usage-derived (exact) replay
+	// pieces. Before the fix these overflowed the next call's cut into the
+	// fresh-input tier.
+	preCompact = append(preCompact, assistantCall(t, "m1",
+		&Usage{InputTokens: 500, CacheCreationInputTokens: 10_000, OutputTokens: 80_000},
+		Content{Type: "thinking", Thinking: "redacted"},
+		Content{Type: "text", Text: strings.Repeat("big ", 50)},
+	)...)
+
+	boundary := TranscriptEntry{Type: "system", Subtype: "compact_boundary"}
+	summary := TranscriptEntry{Type: "user", IsCompactSummary: true,
+		Message: &Message{Content: ContentSlice{
+			{Type: "text", Text: strings.Repeat("summary of prior work ", 100)},
+		}}}
+
+	u2 := &Usage{InputTokens: 60, CacheReadInputTokens: 9_000,
+		CacheCreationInputTokens: 400, OutputTokens: 30}
+	post := assistantCall(t, "m2", u2, Content{Type: "text", Text: "continuing"})
+
+	entries := append(append(preCompact, boundary, summary), post...)
+	turn := entries[len(entries)-len(post):]
+
+	snap := computeBillingSnapshot(entries, turn)
+	if snap == nil {
+		t.Fatal("expected billing snapshot")
+	}
+
+	read, write, fresh, output, rows := billingColumnSums(snap)
+	closeEnough := func(got, want int) bool {
+		d := got - want
+		if d < 0 {
+			d = -d
+		}
+		return d <= rows
+	}
+	if !closeEnough(read, u2.CacheReadInputTokens) || !closeEnough(write, u2.CacheCreationInputTokens) ||
+		!closeEnough(fresh, u2.InputTokens) || !closeEnough(output, u2.OutputTokens) {
+		t.Errorf("Σ lanes = read %d / write %d / fresh %d / output %d, want %d/%d/%d/%d (±%d)",
+			read, write, fresh, output, u2.CacheReadInputTokens, u2.CacheCreationInputTokens,
+			u2.InputTokens, u2.OutputTokens, rows)
+	}
+
+	lanes := snap["lanes"].(map[string]interface{})
+	pa, ok := lanes["prior_assistant"].(map[string]interface{})
+	if !ok {
+		t.Fatal("expected prior_assistant lane (compact summary)")
+	}
+	foundSummary := false
+	for _, it := range pa["items"].([]map[string]interface{}) {
+		if it["name"] == "compact_summary" && it["total"].(int) > 0 {
+			foundSummary = true
+		}
+		if it["name"] == "thinking" && it["total"].(int) > 0 {
+			t.Errorf("pre-compact thinking leaked into the replay: %v", it)
+		}
+	}
+	if !foundSummary {
+		t.Errorf("expected compact_summary item in prior_assistant: %v", pa["items"])
+	}
+	if up, ok := lanes["user_prompts"].(map[string]interface{}); ok {
+		if up["total"].(int) > 0 {
+			t.Errorf("pre-compact user prompt leaked into the replay: %v", up)
+		}
+	}
+}
+
+// Safety net: when usage-derived replay pieces alone exceed the call's
+// measured prompt (undetected truncation), they must be scaled down so the
+// per-call exactness contract still holds — the overshoot must never land
+// in the fresh-input tier.
+func TestBillingExactOvershootIsClamped(t *testing.T) {
+	entries := []TranscriptEntry{userPromptEntry("hi")}
+	entries = append(entries, assistantCall(t, "m1",
+		&Usage{InputTokens: 20, OutputTokens: 50_000},
+		Content{Type: "thinking", Thinking: "redacted"},
+		Content{Type: "text", Text: "done"},
+	)...)
+	u2 := &Usage{InputTokens: 40, CacheReadInputTokens: 1_000, OutputTokens: 10}
+	entries = append(entries, assistantCall(t, "m2", u2, Content{Type: "text", Text: "ok"})...)
+
+	snap := computeBillingSnapshot(entries, entries)
+	if snap == nil {
+		t.Fatal("expected billing snapshot")
+	}
+
+	wantRead := u2.CacheReadInputTokens
+	wantFresh := 20 + u2.InputTokens
+	wantOut := 50_000 + u2.OutputTokens
+
+	read, write, fresh, output, rows := billingColumnSums(snap)
+	closeEnough := func(got, want int) bool {
+		d := got - want
+		if d < 0 {
+			d = -d
+		}
+		return d <= rows
+	}
+	if !closeEnough(read, wantRead) || !closeEnough(write, 0) ||
+		!closeEnough(fresh, wantFresh) || !closeEnough(output, wantOut) {
+		t.Errorf("Σ lanes = read %d / write %d / fresh %d / output %d, want %d/0/%d/%d (±%d)",
+			read, write, fresh, output, wantRead, wantFresh, wantOut, rows)
+	}
+}

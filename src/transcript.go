@@ -9,15 +9,19 @@ import (
 )
 
 type TranscriptEntry struct {
-	Type          string         `json:"type"`
-	UUID          string         `json:"uuid"`
-	Timestamp     string         `json:"timestamp"`
-	Slug          string         `json:"slug,omitempty"`
-	AITitle       string         `json:"aiTitle,omitempty"` // populated on type:"ai-title" events
-	Version       string         `json:"version,omitempty"` // Claude Code CLI version stamped on every user/assistant entry
-	Message       *Message       `json:"message,omitempty"`
-	ToolUseResult *ToolUseResult `json:"toolUseResult,omitempty"`
-	Attachment    *Attachment    `json:"attachment,omitempty"`
+	Type      string `json:"type"`
+	Subtype   string `json:"subtype,omitempty"` // e.g. "compact_boundary" on type:"system"
+	UUID      string `json:"uuid"`
+	Timestamp string `json:"timestamp"`
+	Slug      string `json:"slug,omitempty"`
+	AITitle   string `json:"aiTitle,omitempty"` // populated on type:"ai-title" events
+	Version   string `json:"version,omitempty"` // Claude Code CLI version stamped on every user/assistant entry
+	// Set on the user entry that carries the compaction summary — the text
+	// that REPLACES the pre-compact conversation in subsequent requests.
+	IsCompactSummary bool           `json:"isCompactSummary,omitempty"`
+	Message          *Message       `json:"message,omitempty"`
+	ToolUseResult    *ToolUseResult `json:"toolUseResult,omitempty"`
+	Attachment       *Attachment    `json:"attachment,omitempty"`
 }
 
 // Attachment covers the subset of `type:"attachment"` records we extract
