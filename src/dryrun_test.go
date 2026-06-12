@@ -120,6 +120,15 @@ func TestTraceNameResolution(t *testing.T) {
 	}
 }
 
+func TestSpansHaveUsage(t *testing.T) {
+	if spansHaveUsage([]Span{{Name: "Read"}, {Name: "Edit"}}) {
+		t.Fatal("tool-only spans should not require context snapshot work")
+	}
+	if !spansHaveUsage([]Span{{Name: "Thinking", Usage: map[string]int{"total_tokens": 12}}}) {
+		t.Fatal("LLM spans with usage should require context snapshot work")
+	}
+}
+
 // TestToolResultDebug enumerates every tool_use → tool_result pair and
 // flags any tool_use whose result the extractor isn't seeing.
 func TestToolResultDebug(t *testing.T) {

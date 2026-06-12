@@ -15,15 +15,10 @@ type EditAggregate struct {
 	LinesOverwritten int
 }
 
-// aggregateEdits walks transcript entries from state.StartLine forward and
-// returns counts for Edit/Write/MultiEdit tool calls Claude made in this trace.
-func aggregateEdits(state *State) *EditAggregate {
+// aggregateEdits walks transcript entries and returns counts for
+// Edit/Write/MultiEdit tool calls Claude made in this trace.
+func aggregateEdits(entries []TranscriptEntry) *EditAggregate {
 	agg := &EditAggregate{Files: map[string]struct{}{}}
-	entries, err := ReadTranscript(state.Transcript, state.StartLine)
-	if err != nil {
-		return agg
-	}
-
 	for _, entry := range entries {
 		if entry.Type != "assistant" || entry.Message == nil {
 			continue
@@ -184,12 +179,14 @@ func postTraceMetrics(state *State) {
 	}
 
 	metrics := map[string]interface{}{}
+	fullEntries, _ := ReadTranscript(state.Transcript, 0)
+	turnEntries, _ := ReadTranscript(state.Transcript, state.StartLine)
 
 	var repo, branch string
 	var commits, insC, delC int
 	var agg *EditAggregate
 	if cwd != "" && git(cwd, "rev-parse", "--is-inside-work-tree") == "true" {
-		agg = aggregateEdits(state)
+		agg = aggregateEdits(turnEntries)
 
 		repo = repoName(cwd)
 		branch = git(cwd, "branch", "--show-current")
@@ -224,8 +221,6 @@ func postTraceMetrics(state *State) {
 		debugLog("postTraceMetrics: skipping git block (cwd=%q not a git work tree)", cwd)
 	}
 
-	fullEntries, _ := ReadTranscript(state.Transcript, 0)
-	turnEntries, _ := ReadTranscript(state.Transcript, state.StartLine)
 	for domain, snap := range domainSnapshotsFromEntries(fullEntries, turnEntries) {
 		if snap != nil {
 			metrics[domain] = snap

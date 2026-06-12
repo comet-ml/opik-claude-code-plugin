@@ -622,13 +622,15 @@ func flush(state *State) {
 	// billed tokens to categories with a single-row query, no JOIN back
 	// to trace.cc.context_runtime. See context_snapshot.go for the
 	// accuracy tradeoff.
-	if snapshot := buildContextSnapshot(state); snapshot != nil {
-		for i := range spans {
-			if spans[i].Usage == nil {
-				continue
+	if spansHaveUsage(spans) {
+		if snapshot := buildContextSnapshot(state); snapshot != nil {
+			for i := range spans {
+				if spans[i].Usage == nil {
+					continue
+				}
+				cc := ensureCCMap(&spans[i])
+				cc["context_snapshot"] = snapshot
 			}
-			cc := ensureCCMap(&spans[i])
-			cc["context_snapshot"] = snapshot
 		}
 	}
 
@@ -636,6 +638,15 @@ func flush(state *State) {
 	if err := api.Post("/spans/batch", SpanBatch{Spans: spans}); err != nil {
 		debugLog("send spans: %v", err)
 	}
+}
+
+func spansHaveUsage(spans []Span) bool {
+	for _, span := range spans {
+		if span.Usage != nil {
+			return true
+		}
+	}
+	return false
 }
 
 // findSlug returns the best per-session identifier available on the

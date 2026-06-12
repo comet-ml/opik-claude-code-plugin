@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -108,6 +109,26 @@ func TestRunTokenCountPassBudgetAndBaseline(t *testing.T) {
 		t.Error("second pass should measure the remaining miss")
 	}
 	_ = spent
+}
+
+func TestRunTokenCountPassDoesNotCacheHTTPError(t *testing.T) {
+	resetTokenCache(t)
+	t.Setenv("ANTHROPIC_API_KEY", "test-key")
+
+	old := countTokensHTTP
+	countTokensHTTP = func(payload []byte, headers map[string]string) (int, error) {
+		return 0, errors.New("count_tokens: 401 Unauthorized")
+	}
+	defer func() { countTokensHTTP = old }()
+
+	text := strings.Repeat("uncached prompt body\n", 20)
+	entries := []TranscriptEntry{userPromptEntry(text)}
+	if spent := runTokenCountPass(entries, 2); spent != 0 {
+		t.Fatalf("spent = %d, want 0 after HTTP error", spent)
+	}
+	if _, ok := tokenCacheGet(defaultCountModel + "|" + sha256hex(text)); ok {
+		t.Error("failed count_tokens response should not populate cache")
+	}
 }
 
 func jsonReadFile(path string) ([]byte, error) {
