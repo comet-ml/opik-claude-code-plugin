@@ -2,6 +2,8 @@
 
 Log Claude Code sessions to [Opik](https://github.com/comet-ml/opik) for LLM observability, plus skills and agents for building observable AI applications.
 
+[Opik](https://github.com/comet-ml/opik) is the open-source LLM observability and evaluation platform, built by [Comet](https://www.comet.com).
+
 ## Features
 
 - **Session Tracing**: Automatically log Claude Code sessions as Opik traces
@@ -225,3 +227,12 @@ opik-claude-code-plugin/
 make build        # Build for all platforms
 make build-local  # Build for current platform only
 ```
+
+## Opik for Claude Code
+
+This repo is part of a set of tools for observing Claude Code and other coding agents with [Opik](https://github.com/comet-ml/opik):
+
+- [opik-claude-code-plugin](https://github.com/comet-ml/opik-claude-code-plugin): log Claude Code sessions as Opik traces, with skills and agents included **(this repo)**
+- [ccsync](https://github.com/comet-ml/ccsync): export Claude Code conversation history to Opik
+- [cost-intelligence-proxy](https://github.com/comet-ml/cost-intelligence-proxy): meter Claude Code token spend and cost per call
+- [opik-skills](https://github.com/comet-ml/opik-skills): agent skills for instrumenting your code with Opik
