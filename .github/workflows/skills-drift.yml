@@ -1,8 +1,8 @@
 name: skills-drift
 
 # Fails if the vendored shared skills (skills/opik, skills/agent-ops) have drifted
-# from the canonical source (comet-ml/opik-skills) at the pinned CANON_REF.
-# No-ops while CANON_REF is UNPINNED (OPIK-7471, before the shared set is complete).
+# from the source of truth (comet-ml/opik-mcp) at the pinned CANON_REF.
+# No-ops while CANON_REF is UNPINNED (OPIK-7471, until skills land in opik-mcp).
 
 on:
   pull_request:
@@ -19,7 +19,7 @@ jobs:
         run: |
           bash scripts/sync-shared-skills.sh
           if ! git diff --quiet -- skills; then
-            echo "::error::Vendored shared skills differ from canonical (comet-ml/opik-skills)."
+            echo "::error::Vendored shared skills differ from source (comet-ml/opik-mcp)."
             echo "Run 'CANON_REF=<ref> bash scripts/sync-shared-skills.sh' and commit the result."
             git --no-pager diff --stat -- skills
             exit 1
