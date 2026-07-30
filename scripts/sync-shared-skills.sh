@@ -13,7 +13,7 @@ CANON_REPO="${CANON_REPO:-https://github.com/comet-ml/opik-mcp.git}"
 CANON_REF="${CANON_REF:-UNPINNED}"   # bump to a canonical commit/tag to actually sync
 SRC="src/opik_mcp/skills"            # skills path within opik-mcp
 DEST="skills"
-SHARED=(opik agent-ops)
+SHARED=(opik evaluate)
 
 if [ "$CANON_REF" = "UNPINNED" ]; then
   echo "CANON_REF is UNPINNED — set it to an opik-mcp ref once the skills have landed"
