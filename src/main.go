@@ -323,7 +323,13 @@ func onSubagentStop() {
 		}
 	}
 
-	parentSpanID := toV7(parentUUID)
+	// Must produce the same id processTranscriptEntries gave the Task span,
+	// so use the Task entry's own transcript timestamp.
+	parentTimestamp := entryTimestamp(input.TranscriptPath, parentUUID)
+	if parentTimestamp == "" {
+		debugLog("subagent_stop: no transcript timestamp for parent %s, span id will not match", parentUUID)
+	}
+	parentSpanID := toV7(parentUUID, parentTimestamp)
 	debugLog("processing subagent with parent=%s", parentSpanID)
 
 	spans := processTranscript(state.TraceID, input.AgentTranscriptPath, 0, parentSpanID)
@@ -562,7 +568,7 @@ func processTranscriptEntries(traceID string, entries []TranscriptEntry, parentS
 		}
 
 		span := Span{
-			ID:          toV7(p.UUID),
+			ID:          toV7(p.UUID, p.Timestamp),
 			TraceID:     traceID,
 			StartTime:   p.Timestamp,
 			EndTime:     endTime,
@@ -770,6 +776,21 @@ func countLines(path string) int {
 		debugLog("scan %s: %v", path, err)
 	}
 	return count
+}
+
+// entryTimestamp returns the transcript timestamp of the entry with the given
+// UUID, or "" when the transcript cannot be read or has no such entry.
+func entryTimestamp(path, uuid string) string {
+	entries, err := ReadTranscript(path, 0)
+	if err != nil {
+		return ""
+	}
+	for _, e := range entries {
+		if e.UUID == uuid {
+			return e.Timestamp
+		}
+	}
+	return ""
 }
 
 func isoNow() string {
