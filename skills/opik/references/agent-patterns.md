@@ -1,3 +1,8 @@
+---
+last_updated: "2026-04-17"
+source_commit: "2.0.0"
+---
+
 # Agent Architecture Patterns
 
 Best practices for building, evaluating, and optimizing AI agents with Opik.

@@ -56,8 +56,7 @@ opik-claude-code-plugin/
 │   └── opik-logger-*       # Compiled binaries (darwin/linux, amd64/arm64)
 ├── src/
 │   └── *.go                # Go source for the tracing logger
-├── skills/
-│   └── agent-ops/          # LLM observability skill + references
+├── skills/                 # vendored from comet-ml/opik-mcp — do not hand-edit (skills/SHARED.md)
 ├── agents/
 │   └── agent-reviewer.md   # Agent code review agent
 ├── commands/
@@ -69,7 +68,7 @@ opik-claude-code-plugin/
 
 ## Contributing Skills
 
-Skills live in `skills/` as directories containing a `SKILL.md` file and optional `references/` directory.
+Skills live in `skills/` as directories containing a `SKILL.md` file and optional `references/` directory. **They are vendored from [`comet-ml/opik-mcp`](https://github.com/comet-ml/opik-mcp)** — propose skill changes there, then bump `CANON_REF` in `scripts/sync-shared-skills.sh` and re-run it here.
 
 ```
 skills/

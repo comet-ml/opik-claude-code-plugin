@@ -2,45 +2,19 @@
 
 Complete guide to tracing LLM applications with the Opik Python SDK.
 
-## Installation & Configuration
+## Setup Note
 
-```bash
-pip install opik
-opik configure  # Interactive setup
-```
+Use [SKILL.md](../SKILL.md) for the canonical setup policy and config-file guidance.
 
-Or configure programmatically:
+Python default:
 
-```python
-# Signature:
-# opik.configure(
-#     api_key: Optional[str] = None,
-#     workspace: Optional[str] = None,
-#     url: Optional[str] = None,          # Deprecated: use url_override instead
-#     url_override: Optional[str] = None,
-#     use_local: bool = False,
-#     force: bool = False,
-#     automatic_approvals: bool = False,
-# ) -> None
+- **Check for `.env` first.** If the project uses `python-dotenv` or has a `.env` file with other API keys, append `OPIK_API_KEY` and `OPIK_WORKSPACE` to that file. Also update `.env.example` if one exists.
+- **Only use `~/.opik.config`** if the project has no `.env` file and no dotenv usage.
+- **Never create both** — one config mechanism per project.
+- **Never overwrite** existing values — only add missing vars.
+- Set `project_name` in code, not in shared machine config.
 
-import opik
-
-# Opik Cloud
-opik.configure(api_key="your-api-key", workspace="your-workspace")
-
-# Local deployment
-opik.configure(url_override="http://localhost:5173/api", use_local=True)
-
-# Force overwrite existing config
-opik.configure(api_key="new-key", force=True)
-```
-
-Or set environment variables:
-```bash
-export OPIK_API_KEY="your-api-key"
-export OPIK_URL_OVERRIDE="https://www.comet.com/opik/api"  # Cloud
-export OPIK_PROJECT_NAME="my-project"
-```
+If you use Opik Cloud with environment variables, always set `OPIK_WORKSPACE`. Without it, the SDK defaults to `"default"` and will fail for most cloud workspaces.
 
 ## The @opik.track Decorator
 
@@ -66,10 +40,111 @@ import opik
     project_name="my-project",     # Override project
     tags=["production", "v2"],     # Add tags
     metadata={"version": "1.0"},   # Add metadata
-    flush=True                     # Flush immediately (for scripts)
+    flush=True,                    # Flush immediately (for scripts)
+    entrypoint=True,               # Mark as agent entry point (enables Local Runner)
 )
 def my_function():
     pass
+```
+
+### Entrypoint Functions
+
+Mark the main agent function with `entrypoint=True` to enable:
+- **Local Runner triggering** — agent can be started from the Opik UI via `opik connect`
+- **Schema discovery** — Opik reads the function's type hints to build an input form in the UI
+
+**Parameter constraint:** The entrypoint function **must only accept primitive-typed parameters**: `str`, `int`, `float`, `bool`, and `list`/`dict` of primitives. These values are entered manually by users in a UI text field via the Local Runner — complex types (Pydantic models, dataclasses, request objects) cannot be represented there. If the natural top-level function accepts a complex type, create a thin wrapper that accepts primitives and delegates to the original.
+
+```python
+@opik.track(entrypoint=True, project_name="my-agent")
+def run_agent(question: str, context: str = "") -> str:
+    """Run the agent with a user question.
+
+    Args:
+        question: The user's question to answer.
+        context: Optional additional context.
+    """
+    return generate_response(question, context)
+```
+
+Then pair with: `opik connect --pair <CODE> python3 app.py`
+
+### Prompt Library
+
+Manage versioned prompts through the `opik.Opik` client. Use `{{variable}}` syntax in prompt text for template variables rendered at call time via `.format()`.
+
+**Storing model config alongside the prompt.** Model names, temperatures, and other parameters you want to version together with the prompt text go in the `metadata` dict. Metadata is stored at the prompt version level — when you fetch a prompt you get both the template and its config from `prompt.metadata`. This replaces the need for a separate config system for prompt-related parameters.
+
+**CRITICAL — call `get_prompt` / `get_chat_prompt` inside a `@opik.track`-decorated function.** This links the fetched prompt version to the trace, making it visible in the Traces view in the Opik UI. Fetching at module level works but the prompt will not appear in traces.
+
+`get_prompt` returns `None` if the prompt doesn't exist yet — check for `None` and create on first run so the same code works for both initial setup and subsequent runs:
+
+```python
+import opik
+
+client = opik.Opik()
+
+@opik.track(entrypoint=True, project_name="my-agent")
+def run_agent(question: str) -> str:
+    # Fetch inside @track so the prompt version is recorded in the trace
+    prompt = client.get_prompt(name="agent-system-prompt")
+    if prompt is None:
+        prompt = client.create_prompt(
+            name="agent-system-prompt",
+            prompt="You are a helpful assistant for {{product}}.",
+            metadata={"model": "gpt-4o", "temperature": 0.7, "max_tokens": 1024},
+        )
+    system_message = prompt.format(product="Opik")
+    response = openai_client.chat.completions.create(
+        model=prompt.metadata["model"],
+        temperature=prompt.metadata["temperature"],
+        max_tokens=prompt.metadata["max_tokens"],
+        messages=[{"role": "system", "content": system_message},
+                  {"role": "user", "content": question}],
+    )
+    return response.choices[0].message.content
+```
+
+For a multi-turn chat template:
+
+```python
+@opik.track(entrypoint=True, project_name="my-agent")
+def run_agent(task: str) -> str:
+    chat_prompt = client.get_chat_prompt(name="agent-chat-template")
+    if chat_prompt is None:
+        chat_prompt = client.create_chat_prompt(
+            name="agent-chat-template",
+            messages=[
+                {"role": "system", "content": "You are a helpful assistant."},
+                {"role": "user", "content": "Help me with {{task}}"},
+            ],
+            metadata={"model": "gpt-4o", "temperature": 0.7},
+        )
+    messages = chat_prompt.format(task=task)
+    return llm_call(
+        model=chat_prompt.metadata["model"],
+        temperature=chat_prompt.metadata["temperature"],
+        messages=messages,
+    )
+```
+
+After the initial run the prompt is registered in the library and can be edited, versioned, and have its metadata updated from the Opik UI. `get_prompt` / `get_chat_prompt` always returns the latest published version, including its metadata. If a new version is published with different metadata (e.g. a different model), the agent picks it up on the next run without a code change.
+
+### Thread ID for Conversational Agents
+
+Group multi-turn conversations into threads:
+
+```python
+@opik.track(entrypoint=True, project_name="chat-agent")
+def handle_message(session_id: str, message: str) -> str:
+    """Handle a chat message.
+
+    Args:
+        session_id: Conversation session identifier.
+        message: The user's message.
+    """
+    opik.update_current_trace(thread_id=session_id)
+    return generate_response(session_id, message)
 ```
 
 ### Nested Functions
@@ -107,13 +182,19 @@ import opik
 
 @opik.track
 def my_agent(query: str):
+    response = generate_response(query)
+
     # Update the current trace
     opik.opik_context.update_current_trace(
         thread_id="conversation-123",
         tags=["customer-support"],
         metadata={"user_id": "user-456"},
         feedback_scores=[
-            {"name": "quality", "value": 0.9}
+            {
+                "name": "user_feedback",
+                "value": 1.0,
+                "reason": "User clicked thumbs up",
+            }
         ]
     )
 
@@ -122,7 +203,7 @@ def my_agent(query: str):
         metadata={"model": "gpt-4", "temperature": 0.7}
     )
 
-    return "Response"
+    return response
 ```
 
 ### Getting Current Context
@@ -674,18 +755,51 @@ def chat_with_ollama(prompt: str) -> str:
 
 The Opik integration is on the LiteLLM side via callback:
 
+**Standalone usage** (no `@opik.track`):
+
 ```python
 from litellm.integrations.opik.opik import OpikLogger
 import litellm
 
 litellm.callbacks = [OpikLogger()]
 
-# All LiteLLM calls are traced regardless of provider
 response = litellm.completion(
     model="gpt-4",
     messages=[{"role": "user", "content": "Hello"}]
 )
 ```
+
+**Inside `@opik.track`** — pass `current_span_data` via metadata so the `OpikLogger` callback nests under the active trace instead of creating a standalone trace:
+
+```python
+from opik import track
+from opik.opik_context import get_current_span_data
+from litellm.integrations.opik.opik import OpikLogger
+import litellm
+
+litellm.callbacks = [OpikLogger()]
+
+@track
+def call_llm(messages, model="gpt-4"):
+    return litellm.completion(
+        model=model,
+        messages=messages,
+        metadata={
+            "opik": {
+                "current_span_data": get_current_span_data(),
+                "tags": ["litellm"],
+            },
+        },
+    )
+
+@track(entrypoint=True)
+def agent(query: str) -> str:
+    return call_llm([{"role": "user", "content": query}])
+```
+
+> **Without the `metadata.opik.current_span_data` pass-through, `OpikLogger` creates orphaned
+> top-level traces that don't nest under your entrypoint.** Always include it when using
+> `OpikLogger` inside `@opik.track`-decorated code.
 
 ## Async Support
 
