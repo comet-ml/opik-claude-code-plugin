@@ -23,7 +23,7 @@ Add tracing to the user's code so their LLM application is observable in Opik.
 Use the Skill tool to load BOTH of these skills before doing anything else:
 
 1. **`opik`** — Opik SDK reference: all integrations, tracing patterns, span types, code snippets
-2. **`agent-ops`** — Agent architecture patterns, evaluation, what to trace and why
+2. **`opik-instrument`** — the end-to-end routine: detect the framework, add the minimum tracing, run a safe path, verify a real trace lands
 
 Load them both now. Do not proceed until both are loaded.
 

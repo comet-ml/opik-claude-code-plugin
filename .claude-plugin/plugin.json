@@ -1,12 +1,12 @@
 {
   "name": "opik",
-  "version": "0.3.1",
-  "description": "LLM observability tooling for agent development and Claude Code",
+  "version": "0.4.0",
+  "description": "Opik tracing for Claude Code sessions, plus the Opik agent skills: instrument, diagnose, explain, test, compare, evaluate, online-eval, optimize",
   "author": {
     "name": "Comet ML",
     "url": "https://comet.com"
   },
-  "repository": "https://github.com/comet-ml/opik-claude-plugin",
+  "repository": "https://github.com/comet-ml/opik-claude-code-plugin",
   "license": "Apache-2.0",
   "keywords": [
     "opik",

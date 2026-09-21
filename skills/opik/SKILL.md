@@ -1,116 +1,216 @@
 ---
 name: opik
-description: This skill should be used when the user needs to add Opik tracing or integrations to their code, instrument an LLM application, or needs reference for Opik SDK usage (Python, TypeScript, REST API). Use for tasks like "add tracing", "instrument my code", "use track_openai", "add OpikTracer", "what span types are available", "how to flush traces".
+description: Reference for the Opik SDK — tracing, span types, framework integrations, threads, and the prompt library (Python, TypeScript, REST). Use for "what span types exist", "how do I flush", "track_openai", "add OpikTracer", "version a prompt". To instrument a repo end to end, use the `opik-instrument` skill.
+metadata:
+  last_updated: "2026-09-08"
+  source_commit: "TODO — pin to the Opik release this was verified against (OPIK-7471)"
 ---
 
 # Opik SDK Reference
 
-Opik is an open-source LLM observability platform. This skill covers the SDK: tracing, integrations, span types, and how to instrument code.
+Opik is an open-source LLM observability platform. This skill is a **reference**
+for the SDK. To instrument a codebase step by step (detect frameworks, add
+config, emit and verify a trace), use the task-shaped `opik-instrument` skill.
 
-## Core Concepts
+## Core concepts
 
-### Traces and Spans
+A trace is one execution path (one request → one response). Spans are the
+operations inside it and form a hierarchy.
 
-A **trace** is a complete execution path (one user request → one response). **Spans** are individual operations within a trace, forming a hierarchy.
+### Span types — the ONLY valid values
 
-### Span Types
+| Type | Use for |
+|------|---------|
+| `general` | orchestration, agent entry points |
+| `llm` | model calls |
+| `tool` | tools, retrieval, API / DB calls |
+| `guardrail` | safety / validation checks |
 
-| Type | Use For | Example |
-|------|---------|---------|
-| `general` | Custom operations, orchestration | Data processing, agent entry point |
-| `llm` | LLM API calls | OpenAI completion, Anthropic message |
-| `tool` | Tool/function execution, data retrieval | Web search, vector DB query, calculator |
-| `guardrail` | Safety/validation checks | PII detection, content moderation |
+Do NOT use `retrieval` or any other value.
 
-**These are the ONLY valid span types.** Do NOT use `retrieval` or any other type.
-
-## Python Quick Start
+## Python — tracing
 
 ```python
 import opik
 
-@opik.track(name="my_agent", type="general")
+@opik.track(name="agent", type="general")
 def agent(query: str) -> str:
-    context = retrieve(query)
-    return generate(query, context)
+    return generate(retrieve(query))
 
 @opik.track(type="tool")
-def retrieve(query: str) -> list:
-    return search_db(query)
+def retrieve(query): ...
 
 @opik.track(type="llm")
-def generate(query: str, context: list) -> str:
-    return llm_call(query, context)
+def generate(ctx): ...
 
-# Nested calls automatically create child spans
-result = agent("What is ML?")
-opik.flush_tracker()  # Flush for scripts
+opik.flush_tracker()   # required in scripts
 ```
 
-## TypeScript Quick Start
+## TypeScript — tracing
 
 ```typescript
 import { Opik } from "opik";
-
 const client = new Opik({ projectName: "my-project" });
 
-const trace = client.trace({ name: "my-agent", input: { query: "Hello" } });
+const trace = client.trace({ name: "agent", input: { query } });
 const span = trace.span({ name: "llm-call", type: "llm" });
-// ... LLM call
-span.end({ output: { response: "Hi!" } });
-trace.end({ output: { response: "Hi!" } });
-
+span.end({ output });
+trace.end({ output });
 await client.flush();
 ```
 
-## Framework Integrations
+## Framework integrations
 
-Use framework-specific integrations instead of manual `@opik.track` when available — they capture more detail (tokens, model, cost) automatically.
+Prefer an integration over manual `@opik.track` — integrations capture tokens,
+model, and cost automatically. Patterns (full list in
+`references/integrations.md`):
 
-For the full list of integrations with code snippets, see `references/integrations.md`.
+- **wrap-the-client** — `track_openai(OpenAI())`, `track_anthropic(...)`
+- **global-enable** — `track_crewai(crew=crew)`
+- **callback** — `dspy.configure(callbacks=[OpikCallback()])`
+- **tracer** — `OpikTracer()` for LangChain / LangGraph / LlamaIndex
+- **agent-specific** — `track_adk_agent_recursive(agent, OpikTracer())`
 
-### Common Patterns
+### LiteLLM inside `@opik.track` (common trap)
 
-**Wrap-the-client** (OpenAI, Anthropic, Bedrock, Gemini, etc.):
+If code uses `litellm` **and** you add `@opik.track`, pass `current_span_data`
+via metadata on every completion call — otherwise `OpikLogger` emits **orphaned**
+top-level traces instead of nesting under your span.
+
 ```python
-from opik.integrations.openai import track_openai
-client = track_openai(OpenAI())
-# All calls now traced automatically
+from opik.opik_context import get_current_span_data
+
+@opik.track
+def call_llm(messages):
+    return litellm.completion(
+        model="gpt-4o", messages=messages,
+        metadata={"opik": {"current_span_data": get_current_span_data()}},
+    )
 ```
 
-**Global enable** (CrewAI, DSPy, etc.):
+## Threads (conversations)
+
+Group turns with `thread_id` — one turn = one trace, shared `thread_id` = one
+thread. Use for chat / multi-turn; skip for single-shot.
+
 ```python
-from opik.integrations.crewai import track_crewai
-track_crewai(project_name="my-project", crew=crew)  # crew= required for v1.0.0+
+@opik.track(entrypoint=True)
+def handle(session_id: str, message: str) -> str:
+    opik.update_current_trace(thread_id=session_id)
+    return reply(message)
 ```
 
-**Callback-based** (DSPy):
+## Prompt library
+
+Version prompts with `client.get_prompt` / `create_prompt` (chat variants:
+`get_chat_prompt` / `create_chat_prompt`). Store model + temperature in the
+prompt `metadata` so they version with the text. Call `get_prompt` **inside** a
+`@opik.track` function so the version links to the trace.
+
 ```python
-from opik.integrations.dspy import OpikCallback
-dspy.configure(callbacks=[OpikCallback()])
+@opik.track(entrypoint=True)
+def run(question: str) -> str:
+    p = client.get_prompt(name="system") or client.create_prompt(
+        name="system",
+        prompt="You help with {{product}}.",
+        metadata={"model": "gpt-4o", "temperature": 0.7},
+    )
+    return llm(p.format(product="Opik"), model=p.metadata["model"])
 ```
 
-**Callback/tracer** (LangChain, LangGraph, LlamaIndex):
-```python
-from opik.integrations.langchain import OpikTracer
-tracer = OpikTracer()
-result = chain.invoke(input, config={"callbacks": [tracer]})
+## How a project is doing
+
+With the MCP connected, start at the project, not at its traces:
+
+```
+read("project", "<project name or id>")
 ```
 
-**Agent-specific** (Google ADK):
-```python
-from opik.integrations.adk import OpikTracer, track_adk_agent_recursive
-opik_tracer = OpikTracer()
-track_adk_agent_recursive(agent, opik_tracer)
+One call returns the last 7 days against the 7 before — trace count, error
+rate, average duration, total cost, SDK traffic only, which is what the Logs
+page's four cards show — plus the score names and usage keys the project
+actually records, and the freshest experiment, dataset, prompt version and
+optimization run in it. `since`/`until` pick another window; `since="30d"` is
+what the UI opens on. A rate or an average over a window with no traces comes
+back `null` rather than `0`, because a rate over no samples is undefined and
+"0% errors" is advice someone may act on.
+
+Then attribute the change rather than restating it:
+
+```
+list("project_metric", project_name="<project>", metric_type="trace_cost")
+list("project_metric", project_name="<project>", metric_type="span_count",
+     breakdown="model", since="30d")
 ```
 
+Rows are time buckets, not records — `interval` is `hourly`/`daily`/`weekly`/
+`total`, and `page`/`size`/`sort` do not apply. `schema("list.project_metric")`
+is the metric list, what each is about, and which groupings each accepts; seven
+of them accept none. The score names the overview returned are the ones worth
+filtering on, and `list("score_name", project_name=…)` has the rest.
 
-## Detailed References
+## Searching traces
 
-| Topic                                                                       | Reference File |
-|-----------------------------------------------------------------------------|----------------|
-| Python SDK (decorators, context, async, distributed tracing, configuration) | `references/tracing-python.md` |
-| TypeScript SDK (client, decorators, framework integrations)                 | `references/tracing-typescript.md` |
-| REST API (HTTP endpoints, authentication)                                   | `references/tracing-rest-api.md` |
-| All integrations with code snippets                                         | `references/integrations.md` |
-| Core concepts (traces, spans, threads, metadata, feedback)                  | `references/observability.md` |
+One filter grammar, OQL, serves both the hosted MCP's `list` tool and the
+SDK's `search_traces` / `search_spans` / `search_threads`:
+
+```
+<field>[.<key>] <op> <value> [AND ...]
+ops: = != > >= < <= contains not_contains starts_with ends_with is_empty is_not_empty in not_in
+```
+
+Strings in double quotes, numbers bare, `duration` in **milliseconds**, dates as
+ISO-8601 instants with a timezone (`"2026-09-08T10:00:00Z"`). Scores and
+dictionaries take a key: `feedback_scores.accuracy < 0.5`,
+`metadata.environment = "prod"`. `AND` is the only connector.
+
+```
+error_info is_not_empty AND duration > 5000
+type = "llm" AND usage.total_tokens > 10000            # spans
+feedback_scores.hallucination > 0.5 AND start_time >= "2026-09-08T00:00:00Z"
+```
+
+With the MCP connected, prefer `list` — it also sorts (`sort="duration desc"`),
+windows (`since="1h"`, `"7d"`), and searches free text (`search="order-42"`):
+
+```
+list(entity_type="trace", project_name="<project>", since="1h",
+     filters="error_info is_not_empty", sort="duration desc")
+```
+
+Trace, span and thread lists add `source = "sdk"` unless you name `source`, so
+evaluator, playground and experiment traces stay out of the way. A rejected
+filter comes back with what fixes it; `schema("list.trace")` (or `list.span`,
+`list.thread`, `list.experiment`) is the full field and operator reference.
+
+Without the MCP, the same string goes to the SDK:
+
+```python
+client.search_traces(project_name="<project>", filter_string="error_info is_not_empty")
+```
+
+## Anti-patterns
+
+| Anti-pattern | Fix |
+|--------------|-----|
+| span type `retrieval` / custom | use `tool` (or `general`) |
+| `get_prompt` outside `@opik.track` | fetch inside — else no trace link |
+| deprecated `opik.Prompt` / `opik.Config` | use `client.get_prompt` / config file |
+| `litellm` without `current_span_data` | pass it — else orphaned traces |
+| no flush in scripts | `opik.flush_tracker()` / `await client.flush()` |
+
+## References
+
+| Topic | File |
+|-------|------|
+| Python SDK (async, distributed, context) | `references/tracing-python.md` |
+| TypeScript SDK | `references/tracing-typescript.md` |
+| REST API | `references/tracing-rest-api.md` |
+| All integrations | `references/integrations.md` |
+| Core concepts (traces, spans, threads) | `references/observability.md` |
+| Best practices (lifecycle, monitoring, anti-patterns) | `references/best-practices.md` |
+| Agent architecture, reliability, security | `references/agent-patterns.md` |
+| Production monitoring, alerts, guardrails | `references/production.md` |
+| Evaluation datasets & test suites (reference) | `references/evaluation-datasets.md`, `references/evaluation-test-suites.md` |
+
+To build and run an evaluation, use the `opik-evaluate` skill. For repo instrumentation and config, use the `opik-instrument` skill.

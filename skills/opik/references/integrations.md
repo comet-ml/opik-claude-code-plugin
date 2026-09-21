@@ -2,6 +2,8 @@
 
 Comprehensive guide to Opik integrations organized by integration mechanism.
 
+> **Using integration callbacks inside `@opik.track`:** Some integrations (like LiteLLM's `OpikLogger`) need the current span context passed explicitly to nest under an existing trace. See each integration's section for the correct pattern. Without this, the callback creates orphaned top-level traces.
+
 ## A. Python — Direct Opik SDK Integrations
 
 These use modules that exist in `opik.integrations.*`. They provide the richest tracing with automatic token/cost capture.
@@ -341,17 +343,43 @@ response = client.chat.completions.create(
 
 LiteLLM provides a unified interface to 100+ LLM providers. The Opik integration is on the LiteLLM side:
 
+**Standalone usage** (no `@opik.track`):
+
 ```python
 from litellm.integrations.opik.opik import OpikLogger
 import litellm
 
 litellm.callbacks = [OpikLogger()]
 
-# All LiteLLM calls are traced regardless of provider
 response = litellm.completion(
     model="gpt-4",
     messages=[{"role": "user", "content": "Hello"}]
 )
+```
+
+**Inside `@opik.track`** — pass `current_span_data` via metadata so the callback nests under the active trace:
+
+```python
+from opik import track
+from opik.opik_context import get_current_span_data
+from litellm.integrations.opik.opik import OpikLogger
+import litellm
+
+litellm.callbacks = [OpikLogger()]
+
+@track
+def call_llm(messages, model="gpt-4"):
+    return litellm.completion(
+        model=model,
+        messages=messages,
+        metadata={
+            "opik": {
+                "current_span_data": get_current_span_data(),
+                "tags": ["litellm"],
+            },
+        },
+    )
+
 ```
 
 Use this for providers like Together AI, Novita AI, IBM WatsonX, xAI Grok, Mistral AI, and any other LiteLLM-supported model:
@@ -603,7 +631,7 @@ Use the Opik node in n8n:
 
 ### Layering Integrations
 
-You can combine integrations:
+You can combine framework-level integrations (e.g., LangChain tracer + tracked OpenAI client). When combining with `@opik.track` decorators, pass the current span context via metadata so callbacks nest correctly — see the LiteLLM section above for the pattern.
 
 ```python
 from opik.integrations.openai import track_openai

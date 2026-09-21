@@ -1,14 +1,22 @@
-# Evaluation & Metrics Guide
+---
+last_updated: "2026-04-17"
+source_commit: "2.0.0"
+---
 
-Comprehensive guide to evaluating LLM applications with Opik's evaluation platform.
+# Legacy Dataset Evaluation & Metrics Guide
 
-## Why Evaluation Matters
+> **This is the LEGACY evaluation path.** For new projects, use **Test Suites** with `run_tests()` instead (see `references/evaluation-test-suites.md`). Only use this Dataset + `evaluate()` approach if the user is already using it or explicitly requests custom metric-based evaluation.
 
-Manual review of LLM outputs doesn't scale. Opik's evaluation platform automates quality assessment with:
-- **Reproducible experiments** across datasets
-- **Quantitative metrics** for objective comparison
-- **Historical tracking** to measure improvement
-- **Side-by-side comparison** of different approaches
+> **Project scoping:** Datasets, prompts, and experiments are project-scoped. Pass `project_name` to `get_or_create_dataset`, `create_dataset`, and `evaluate` so entities land in the right project. If the user also uses `@track` tracing, the `project_name` in `opik.configure(project_name=...)` must match the `project_name` passed to these APIs — otherwise traces and entities end up in different projects.
+
+## When to Use This (vs Test Suites)
+
+| Use Datasets + `evaluate()` when... | Use Test Suites + `run_tests()` when... |
+|---|---|
+| You need custom scoring metrics (heuristic or LLM-as-judge) | You want simple string assertions checked by an LLM judge |
+| You need fine-grained per-metric scores | You need pass/fail with execution policies |
+| You're migrating from an existing dataset-based workflow | Starting fresh or building CI gates |
+| You need RAG-specific metrics (ContextPrecision, etc.) | You want built-in multi-run reliability testing |
 
 ## Core Concepts
 
@@ -37,7 +45,7 @@ An **experiment** is a single evaluation run that:
 from opik import Opik
 
 client = Opik()
-dataset = client.get_or_create_dataset(name="my-evaluation-dataset")
+dataset = client.get_or_create_dataset(name="my-evaluation-dataset", project_name="my-project")
 
 # Insert items
 dataset.insert([
@@ -70,7 +78,7 @@ import pandas as pd
 from opik import Opik
 
 client = Opik()
-dataset = client.get_or_create_dataset(name="from-pandas")
+dataset = client.get_or_create_dataset(name="from-pandas", project_name="my-project")
 
 df = pd.DataFrame({
     "input": ["What is ML?", "Explain AI"],
@@ -83,14 +91,16 @@ dataset.insert_from_pandas(df)
 ### From JSONL Files
 
 ```python
-dataset.insert_from_jsonl("path/to/data.jsonl")
+dataset.read_jsonl_from_file("path/to/data.jsonl")
 ```
 
 ## Dataset Versioning
 
 Opik supports immutable dataset versions for reproducible evaluations.
 
-### Creating Versions
+### Accessing Versions
+
+Opik automatically versions datasets when items are inserted or modified.
 
 ```python
 from opik import Opik
@@ -98,25 +108,30 @@ from opik import Opik
 client = Opik()
 dataset = client.get_dataset(name="my-dataset")
 
-# Create a named version (immutable snapshot)
-version = dataset.create_version(name="v1.0")
+# Get current version name
+current = dataset.get_current_version_name()
+print(f"Current version: {current}")
 
-# List all versions
-versions = dataset.list_versions()
-for v in versions:
-    print(f"{v.name}: {v.item_count} items, created {v.created_at}")
+# Get detailed version info
+info = dataset.get_version_info()
+print(f"Version: {info.version_name}, items: {info.items_total}")
+
+# Get a read-only view of a specific version for reproducible evaluation
+version_view = dataset.get_version_view("v1")
+print(f"Version {version_view.version_name}: {version_view.items_total} items")
 ```
 
-### Using Specific Versions
+### Evaluating a Specific Version
 
 ```python
-# Run evaluation on a specific version
+# Pin evaluation to a specific dataset version
+version_view = dataset.get_version_view("v1")
 results = evaluate(
     experiment_name="test-v1",
-    dataset=dataset,
-    dataset_version="v1.0",  # Pin to specific version
+    dataset=version_view,  # Pass the version view directly
     task=evaluation_task,
-    scoring_metrics=[AnswerRelevance()]
+    scoring_metrics=[AnswerRelevance()],
+    project_name="my-project",
 )
 ```
 
@@ -127,7 +142,6 @@ In the UI:
 2. Click "Versions" tab
 3. View version history with timestamps
 4. Compare versions side-by-side
-5. Restore or duplicate from any version
 
 ## AI Expansion (Synthetic Data)
 
@@ -145,22 +159,7 @@ In the Opik UI:
    - Topic constraints
 5. Review and approve generated items
 
-### Programmatic Expansion
-
-```python
-from opik import Opik
-
-client = Opik()
-dataset = client.get_dataset(name="my-dataset")
-
-# Generate synthetic variations
-dataset.expand(
-    num_items=50,
-    seed_items=dataset.get_items()[:5],  # Use 5 examples as seeds
-    diversity="high",
-    model="gpt-4"
-)
-```
+AI Expansion is a UI-only feature and is not available via the Python SDK.
 
 ## OQL: Opik Query Language
 
@@ -202,12 +201,12 @@ score > 0.9 OR model = "gpt-4"
 # Filter traces
 traces = client.search_traces(
     project_name="production",
-    filter='score > 0.7 AND metadata.user_type = "premium"'
+    filter_string='score > 0.7 AND metadata.user_type = "premium"'
 )
 
 # Filter dataset items
 items = dataset.get_items(
-    filter='input contains "error" AND expected_output exists'
+    filter_string='input contains "error" AND expected_output exists'
 )
 ```
 
@@ -222,63 +221,60 @@ In the Opik UI:
 2. Click "Create Queue"
 3. Configure:
    - Queue name
-   - Sampling rules (all traces, percentage, or filtered)
-   - Annotation schema (scores, labels, free text)
+   - Description and reviewer instructions
+   - Feedback definitions (scores/labels to collect)
    - Assignees
 
-### Annotation Schema
+### Via Python SDK
 
-Define what reviewers evaluate:
+Opik provides separate queue types for traces and threads:
 
 ```python
 from opik import Opik
 
 client = Opik()
 
-# Create annotation queue
-queue = client.create_annotation_queue(
+# Create annotation queue for traces
+queue = client.create_traces_annotation_queue(
     name="quality-review",
     project_name="production",
-    schema={
-        "scores": [
-            {"name": "accuracy", "type": "numeric", "min": 0, "max": 5},
-            {"name": "helpfulness", "type": "numeric", "min": 0, "max": 5}
-        ],
-        "labels": [
-            {"name": "category", "options": ["good", "needs_work", "bad"]}
-        ],
-        "free_text": ["comments"]
-    },
-    sampling_rate=0.1  # Sample 10% of traces
+    description="Review agent responses for quality",
+    instructions="Rate accuracy 1-5, flag any hallucinations",
+    comments_enabled=True,
+    feedback_definition_names=["accuracy", "helpfulness"],
 )
+
+# Create annotation queue for threads (multi-turn conversations)
+thread_queue = client.create_threads_annotation_queue(
+    name="conversation-review",
+    project_name="production",
+    description="Review multi-turn conversations",
+    feedback_definition_names=["conversation_quality"],
+)
+
+# Add traces to a queue by searching
+traces = client.search_traces(project_name="production", filter_string='score < 0.5')
+queue.add_traces(traces=traces)
+
+# Or add individual traces by ID
+trace = client.get_trace_content(id="trace-id-1")
+queue.add_traces(traces=[trace])
+
+# Add threads to a queue
+threads = client.search_threads(project_name="production")
+thread_queue.add_threads(threads=threads)
 ```
 
 ### Reviewing Items
 
 1. Go to your annotation queue
-2. Items appear based on sampling rules
+2. Items appear based on what was added
 3. For each item:
    - View trace details
    - Apply scores and labels
    - Add comments
    - Submit annotation
 4. Progress is tracked per reviewer
-
-### Using Annotations
-
-```python
-# Get annotated traces
-annotated = client.search_traces(
-    project_name="production",
-    filter='annotation.queue = "quality-review" AND annotation.completed = true'
-)
-
-# Export annotations for training
-annotations = client.export_annotations(
-    queue_name="quality-review",
-    format="jsonl"
-)
-```
 
 ## Running Evaluations
 
@@ -290,7 +286,7 @@ from opik.evaluation import evaluate
 from opik.evaluation.metrics import Equals, AnswerRelevance
 
 client = Opik()
-dataset = client.get_dataset(name="my-dataset")
+dataset = client.get_dataset(name="my-dataset", project_name="my-project")
 
 # Define the task (how to process each item)
 def evaluation_task(dataset_item):
@@ -306,7 +302,8 @@ results = evaluate(
     scoring_metrics=[
         Equals(),              # Exact match
         AnswerRelevance()      # LLM-as-Judge
-    ]
+    ],
+    project_name="my-project",
 )
 ```
 
@@ -337,13 +334,14 @@ results = evaluate(
         ContextPrecision(),
         ContextRecall(),
         Hallucination()
-    ]
+    ],
+    project_name="my-project",
 )
 ```
 
-## Built-in Metrics (41 Total)
+## Built-in Metrics (60+)
 
-Opik provides 41 built-in metrics organized into categories.
+Opik provides 60+ built-in metrics organized into categories. All are importable from `opik.evaluation.metrics`.
 
 ### Heuristic Metrics
 
@@ -353,23 +351,27 @@ Deterministic, rule-based checks that don't require LLM calls:
 - `Equals` - Exact string match
 - `Contains` - Substring presence
 - `RegexMatch` - Pattern matching
-- `Levenshtein` - Edit distance
-- `BLEU` - Translation quality (n-gram overlap)
+- `LevenshteinRatio` - Edit distance ratio
+- `SentenceBLEU` / `CorpusBLEU` - Translation quality (n-gram overlap)
 - `ROUGE` - Summarization quality (recall-oriented)
+- `GLEU` - Generalized language evaluation understudy
+- `ChrF` - Character n-gram F-score
+- `METEOR` - Machine translation metric
 - `BERTScore` - Semantic similarity using embeddings
+- `SpearmanRanking` - Rank correlation
 
-**Validation:**
+**Validation & Analysis:**
 - `IsJson` - Valid JSON check
-- `JsonSchemaMatch` - Validates against JSON schema
-- `Sentiment` - Sentiment analysis (-1 to 1)
+- `Sentiment` - Sentiment analysis
+- `VADERSentiment` - Rule-based sentiment analysis
+- `Readability` - Text readability scoring
+- `Tone` - Tone detection
+- `PromptInjection` - Detects prompt injection attempts
+- `LanguageAdherenceMetric` - Checks language consistency
 
-### Conversation Heuristic Metrics
-
-For multi-turn conversation analysis:
-
-- `ConversationCoherence` - Flow between turns
-- `TopicDrift` - Measures topic consistency
-- `ResponseLatency` - Tracks response timing patterns
+**Statistical:**
+- `JSDivergence` / `JSDistance` - Jensen-Shannon divergence/distance
+- `KLDivergence` - Kullback-Leibler divergence
 
 ### LLM-as-Judge Metrics
 
@@ -379,32 +381,54 @@ Use an LLM to evaluate semantic quality:
 - `AnswerRelevance` - Does the answer address the question?
 - `Hallucination` - Are there unsupported claims?
 - `Usefulness` - How useful is the response?
-- `MeaningMatch` - Semantic equivalence
 - `Moderation` - Safety and policy violations
 - `GEval` - Configurable custom criteria
+- `GEvalPreset` - Pre-built evaluation criteria
+- `SycEval` - Sycophancy detection
+- `StructuredOutputCompliance` - Validates structured output format
+- `LLMJuriesJudge` - Multi-judge ensemble evaluation
 
 **RAG-Specific:**
 - `ContextPrecision` - Is only relevant context used?
 - `ContextRecall` - Is all relevant context used?
-- `Faithfulness` - Does output align with provided context?
 
-### Conversation LLM Metrics
+### GEval Preset Judges
 
-For evaluating chat and dialogue quality:
+Pre-built judge metrics for common evaluation scenarios:
 
-- `ConversationQuality` - Overall conversation effectiveness
-- `ResponseAppropriate` - Is the response fitting for the context?
-- `TurnCoherence` - Logical connection between turns
+- `AgentTaskCompletionJudge` - Did the agent complete its task?
+- `AgentToolCorrectnessJudge` - Were tools used correctly?
+- `ComplianceRiskJudge` - Compliance risk assessment
+- `DemographicBiasJudge` / `GenderBiasJudge` / `PoliticalBiasJudge` / `RegionalBiasJudge` / `ReligiousBiasJudge` - Bias detection
+- `DialogueHelpfulnessJudge` - Dialogue quality
+- `PromptUncertaintyJudge` - Uncertainty detection
+- `QARelevanceJudge` - QA relevance scoring
+- `SummarizationCoherenceJudge` / `SummarizationConsistencyJudge` - Summarization quality
+
+### Conversation Metrics
+
+For multi-turn conversation analysis:
+
+- `ConversationalCoherenceMetric` - Flow between turns
+- `ConversationDegenerationMetric` - Detects conversation quality decline
+- `KnowledgeRetentionMetric` - Tracks knowledge consistency across turns
+- `SessionCompletenessQuality` - Overall session effectiveness
+- `UserFrustrationMetric` - Detects user frustration signals
+- `ConversationThreadMetric` - General thread-level evaluation
+
+**Conversation GEval Wrappers** (apply GEval presets to full conversations):
+- `GEvalConversationMetric` - Custom criteria on conversations
+- `ConversationDialogueHelpfulnessMetric` - Helpfulness across turns
+- `ConversationQARelevanceMetric` - QA relevance across turns
+- `ConversationComplianceRiskMetric` / `ConversationSummarizationCoherenceMetric` / `ConversationSummarizationConsistencyMetric` / `ConversationPromptUncertaintyMetric`
 
 ### Agent-Specific Metrics
 
 For evaluating agentic behavior:
 
-- `AgentTaskCompletion` - Did the agent complete its task?
-- `AgentToolCorrectness` - Were tools used correctly?
+- `AgentTaskCompletionJudge` - Did the agent complete its task?
+- `AgentToolCorrectnessJudge` - Were tools used correctly?
 - `TrajectoryAccuracy` - Did the agent follow expected steps?
-- `PlanningQuality` - Quality of agent's planning
-- `ToolSelectionAccuracy` - Did agent pick appropriate tools?
 
 ## Using Metrics
 
@@ -500,7 +524,8 @@ results = evaluate(
     dataset=dataset,
     task=evaluation_task,
     scoring_metrics=[AnswerRelevance()],
-    experiment_scoring_functions=[compute_experiment_scores]
+    experiment_scoring_functions=[compute_experiment_scores],
+    project_name="my-project",
 )
 ```
 
@@ -561,11 +586,12 @@ In the Opik UI:
 import { Opik, evaluate, Hallucination } from "opik";
 
 const client = new Opik();
-const dataset = await client.getDataset("my-dataset");
+const dataset = await client.getDataset("my-dataset", "my-project");
 
 const results = await evaluate({
   experimentName: "ts-evaluation",
   dataset,
+  projectName: "my-project",
   task: async (item) => {
     const response = await myLLM(item.input);
     return { output: response };

@@ -175,14 +175,23 @@ The command ensures tracing starts at your entry point (critical for replay capa
 
 ## Skills
 
-### `/opik:agent-ops` - LLM Observability Knowledge
+### Opik skills (vendored from `comet-ml/opik-mcp`)
 
-Comprehensive guidance on:
-- Opik setup and configuration
-- Tracing with Python/TypeScript SDKs
-- 80+ framework integrations (LangChain, CrewAI, OpenAI, Anthropic, etc.)
-- Evaluation with 41 built-in metrics
-- Production monitoring, guardrails, and debugging
+The plugin ships the Opik skill pack — the same skills published as [`opik-skills`](https://github.com/comet-ml/opik-skills). Claude loads them by task:
+
+| Skill | Use for |
+| --- | --- |
+| `opik` | SDK reference — span types, integrations, threads, the prompt library |
+| `opik-instrument` | "add opik tracing", "instrument my code" — and verify a real trace lands |
+| `opik-diagnose` | "what is broken in production", "which traces need attention" |
+| `opik-explain` | "why did this trace fail", "debug this trace" |
+| `opik-test` | "turn this trace into a test", "make sure this doesn't happen again" |
+| `opik-compare` | "did my fix work", "which cases regressed" |
+| `opik-evaluate` | "evaluate my agent", "build an eval", "write an LLM judge" |
+| `opik-online-eval` | "score production traces", "take this judge live" |
+| `opik-optimize` | "optimize this prompt", "run the prompt optimizer" |
+
+They are vendored at a pinned `opik-mcp` commit (see `skills/SHARED.md`); edit them upstream, not here.
 
 ## Agents
 
@@ -210,8 +219,9 @@ opik-claude-code-plugin/
 │   └── opik-logger-*       # Compiled binaries (darwin/linux, amd64/arm64)
 ├── src/
 │   └── *.go                # Go source code
-├── skills/
-│   └── agent-ops/          # Observability skill + references
+├── skills/                 # Opik skill pack, vendored from comet-ml/opik-mcp (see skills/SHARED.md)
+│   ├── opik/
+│   ├── opik-instrument/ … opik-optimize/
 ├── agents/
 │   └── agent-reviewer.md   # Agent review agent
 ├── commands/

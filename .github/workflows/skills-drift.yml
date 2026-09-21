@@ -1,0 +1,26 @@
+name: skills-drift
+
+# Fails if the vendored skills under skills/ have drifted from their source of truth
+# (comet-ml/opik-mcp at the CANON_REF pinned in scripts/sync-shared-skills.sh).
+# Fix: edit upstream, merge, bump CANON_REF, re-run the script, commit.
+
+on:
+  pull_request:
+    paths: ["skills/**", "scripts/sync-shared-skills.sh", ".github/workflows/skills-drift.yml"]
+  push:
+    branches: [main]
+
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Re-vendor at the pinned ref and check for drift
+        run: |
+          bash scripts/sync-shared-skills.sh
+          if ! git diff --quiet -- skills || [ -n "$(git status --porcelain -- skills)" ]; then
+            echo "::error::Vendored skills differ from comet-ml/opik-mcp at the pinned CANON_REF."
+            git --no-pager status --porcelain -- skills
+            exit 1
+          fi
+          echo "no drift"
