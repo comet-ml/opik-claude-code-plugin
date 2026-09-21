@@ -1,7 +1,7 @@
 {
   "name": "opik",
-  "version": "0.4.0",
-  "description": "Opik tracing for Claude Code sessions, plus the Opik agent skills: instrument, diagnose, explain, test, compare, evaluate, online-eval, optimize",
+  "version": "0.5.0",
+  "description": "Opik tracing for Claude Code sessions, plus the Opik agent skills: instrument, diagnose, explain, test, compare, evaluate, verify, online-eval, optimize",
   "author": {
     "name": "Comet ML",
     "url": "https://comet.com"
