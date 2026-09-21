@@ -14,7 +14,7 @@ jobs:
   drift:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Re-vendor at the pinned ref and check for drift
         run: |
           bash scripts/sync-shared-skills.sh

@@ -20,13 +20,15 @@ SHARED=(opik opik-compare opik-diagnose opik-evaluate opik-explain opik-instrume
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
-git clone --quiet "$CANON_REPO" "$tmp"
+git clone --quiet --filter=blob:none "$CANON_REPO" "$tmp"   # blobs fetched lazily on checkout
 git -C "$tmp" checkout --quiet "$CANON_REF"
 
 for s in "${SHARED[@]}"; do
   if [ ! -d "$tmp/$SRC/$s" ]; then
-    echo "skip '$s' — not in opik-mcp@$CANON_REF" >&2
-    continue
+    # SHARED and CANON_REF disagree. Carrying on would leave the stale vendored copy in
+    # place and the drift check would pass over it, so this is an error, not a warning.
+    echo "error: '$s' is in SHARED but not in opik-mcp@$CANON_REF — drop it from SHARED or bump the pin" >&2
+    exit 1
   fi
   rm -rf "${DEST:?}/$s"
   # Same exclusions as the published pack: evals/ is development tooling.

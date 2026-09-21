@@ -13,8 +13,8 @@
         "name": "Comet ML",
         "url": "https://comet.com"
       },
-      "homepage": "https://github.com/comet-ml/opik-claude-plugin",
-      "repository": "https://github.com/comet-ml/opik-claude-plugin",
+      "homepage": "https://github.com/comet-ml/opik-claude-code-plugin",
+      "repository": "https://github.com/comet-ml/opik-claude-code-plugin",
       "license": "Apache-2.0",
       "keywords": [
         "opik",

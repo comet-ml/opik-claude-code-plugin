@@ -192,6 +192,9 @@ The plugin ships the Opik skill pack — the same skills published as [`opik-ski
 | `opik-optimize` | "optimize this prompt", "run the prompt optimizer" |
 
 They are vendored at a pinned `opik-mcp` commit (see `skills/SHARED.md`); edit them upstream, not here.
+
+## Agents
+
 ### `agent-reviewer`
 
 Reviews agent code for:
