@@ -12,11 +12,11 @@
 set -euo pipefail
 
 CANON_REPO="${CANON_REPO:-https://github.com/comet-ml/opik-mcp.git}"
-CANON_REF="${CANON_REF:-0baa5aecf0224701473efd968be4aa5a166ba99f}"   # opik-mcp main after #191 (nine skills)
+CANON_REF="${CANON_REF:-8fb9c4b09f8854581e7b34a37049773f5fedd869}"   # opik-mcp main after #200 (ten skills)
 SRC="src/opik_mcp/skills"
 DEST="skills"
 # Every skill the pack ships. Order matches the published index.
-SHARED=(opik opik-compare opik-diagnose opik-evaluate opik-explain opik-instrument opik-online-eval opik-optimize opik-test)
+SHARED=(opik opik-compare opik-diagnose opik-evaluate opik-explain opik-instrument opik-online-eval opik-optimize opik-test opik-verify)
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT

@@ -190,6 +190,7 @@ The plugin ships the Opik skill pack — the same skills published as [`opik-ski
 | `opik-evaluate` | "evaluate my agent", "build an eval", "write an LLM judge" |
 | `opik-online-eval` | "score production traces", "take this judge live" |
 | `opik-optimize` | "optimize this prompt", "run the prompt optimizer" |
+| `opik-verify` | "is this safe to ship", "go/no-go on this change" |
 
 They are vendored at a pinned `opik-mcp` commit (see `skills/SHARED.md`); edit them upstream, not here.
 
