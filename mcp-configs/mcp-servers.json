@@ -12,7 +12,7 @@
     }
   },
   "_comments": {
-    "usage": "Copy the opik server config to your ~/.claude.json mcpServers section",
+    "usage": "The plugin already registers the hosted Opik MCP server (OAuth, see .mcp.json). These are local alternatives: copy one into your ~/.claude.json mcpServers section",
     "cloud": "Use 'opik' config with your API key from comet.com for Opik Cloud",
     "self_hosted": "Use 'opik-local' config for self-hosted Opik (adjust apiBaseUrl as needed)",
     "docs": "See https://github.com/comet-ml/opik-mcp for setup instructions"

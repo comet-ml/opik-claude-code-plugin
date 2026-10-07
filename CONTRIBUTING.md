@@ -48,6 +48,7 @@ opik-claude-code-plugin/
 ├── .claude-plugin/
 │   ├── plugin.json         # Plugin manifest
 │   └── marketplace.json    # Marketplace definition
+├── .mcp.json               # Hosted Opik MCP server (registered by the plugin)
 ├── hooks/
 │   └── hooks.json          # Hook configuration (session tracing)
 ├── scripts/
@@ -63,7 +64,7 @@ opik-claude-code-plugin/
 │   ├── instrument.md       # /opik:instrument command
 │   └── trace-claude-code.md  # /opik:trace-claude-code command
 └── mcp-configs/
-    └── mcp-servers.json    # MCP server configurations
+    └── mcp-servers.json    # Local MCP server templates (API key / self-hosted)
 ```
 
 ## Contributing Skills

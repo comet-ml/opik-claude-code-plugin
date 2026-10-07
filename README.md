@@ -90,11 +90,33 @@ export OPIK_CC_PARENT_TRACE_ID="your-trace-id"  # Attach to existing trace
 export OPIK_CC_ROOT_SPAN_ID="your-span-id"      # Set parent span for all Claude Code spans
 ```
 
-## MCP Server Setup
+## MCP Server
 
-The [Opik MCP server](https://github.com/comet-ml/opik-mcp) provides Claude with tools to interact with your Opik data - query traces, analyze experiments, and access evaluation results directly in conversation.
+The plugin registers the hosted [Opik MCP server](https://github.com/comet-ml/opik-mcp) (`https://www.comet.com/opik/api/v1/mcp`) as `plugin:opik:opik`. It gives Claude tools to interact with your Opik data - query traces, analyze experiments, and access evaluation results directly in conversation. The Opik skills use it when it's connected and fall back to the SDK when it isn't.
 
-### For Opik Cloud
+It authenticates with OAuth in your browser, so no API key goes into a config file. Sign in once after installing the plugin:
+
+```bash
+claude mcp login plugin:opik:opik
+```
+
+or run `/mcp` in Claude Code, select `plugin:opik:opik`, and choose **Authenticate**.
+
+Claude Code de-duplicates MCP servers by URL. If the Opik connector is also enabled for your claude.ai account, a session may use that connector instead of `plugin:opik:opik`. In that case, sign in to the connector too (`/mcp` → `claude.ai Opik - Remote`), or disconnect it on claude.ai.
+
+### Other Opik Deployments
+
+To point the bundled server at a different Comet deployment, set `OPIK_CC_MCP_URL` before starting Claude Code:
+
+```bash
+export OPIK_CC_MCP_URL="https://<your-comet-host>/opik/api/v1/mcp"
+```
+
+### Local MCP Server (API key or self-hosted Opik)
+
+You can run the MCP server locally instead, e.g. against a self-hosted Opik. Disable `plugin:opik:opik` in `/mcp` if you don't use it.
+
+#### For Opik Cloud
 
 Add to your `~/.claude.json`:
 
@@ -111,7 +133,7 @@ Add to your `~/.claude.json`:
 
 Replace `YOUR_OPIK_API_KEY` with your API key from [comet.com](https://www.comet.com).
 
-### For Self-Hosted Opik
+#### For Self-Hosted Opik
 
 ```json
 {
@@ -126,9 +148,9 @@ Replace `YOUR_OPIK_API_KEY` with your API key from [comet.com](https://www.comet
 
 Adjust the `apiBaseUrl` to match your Opik instance.
 
-### Pre-configured Templates
+#### Pre-configured Templates
 
-Copy-ready configurations are available in `mcp-configs/mcp-servers.json`.
+Copy-ready configurations for the local server are available in `mcp-configs/mcp-servers.json`.
 
 ## Commands
 
@@ -212,6 +234,7 @@ opik-claude-code-plugin/
 ├── .claude-plugin/
 │   ├── plugin.json         # Plugin manifest
 │   └── marketplace.json    # Marketplace definition
+├── .mcp.json               # Hosted Opik MCP server (registered by the plugin)
 ├── hooks/
 │   └── hooks.json          # Hook configuration
 ├── scripts/
@@ -229,7 +252,7 @@ opik-claude-code-plugin/
 │   ├── trace-claude-code.md  # /opik:trace-claude-code command
 │   └── instrument.md         # /opik:instrument command
 └── mcp-configs/
-    └── mcp-servers.json    # MCP server configurations
+    └── mcp-servers.json    # Local MCP server templates (API key / self-hosted)
 ```
 
 ## Building from Source

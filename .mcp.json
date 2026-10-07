@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "opik": {
+      "type": "http",
+      "url": "${OPIK_CC_MCP_URL:-https://www.comet.com/opik/api/v1/mcp}"
+    }
+  }
+}
