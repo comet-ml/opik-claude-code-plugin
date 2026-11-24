@@ -9,9 +9,10 @@ build:
 		os=$${platform%/*}; arch=$${platform#*/}; \
 		ext=""; [ "$$os" = "windows" ] && ext=".exe"; \
 		echo "Building $$os/$$arch..."; \
-		GOOS=$$os GOARCH=$$arch go build -trimpath -ldflags="-s -w" -o bin/$(BINARY)-$$os-$$arch$$ext ./src; \
+		GOOS=$$os GOARCH=$$arch go build -trimpath -ldflags="-s -w" -o bin/$(BINARY)-$$os-$$arch$$ext ./src && \
+		gzip -9 -n -f bin/$(BINARY)-$$os-$$arch$$ext; \
 	done
-	@echo "Done. Binaries in bin/"
+	@echo "Done. Gzipped binaries in bin/"
 
 build-local:
 	@mkdir -p bin

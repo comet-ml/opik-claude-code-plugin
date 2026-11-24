@@ -53,7 +53,7 @@ opik-claude-code-plugin/
 ├── scripts/
 │   └── opik-logger         # Platform selector script
 ├── bin/
-│   └── opik-logger-*       # Compiled binaries (darwin/linux, amd64/arm64)
+│   └── opik-logger-*.gz    # Gzipped binaries, unpacked on first run
 ├── src/
 │   └── *.go                # Go source for the tracing logger
 ├── skills/                 # vendored from comet-ml/opik-mcp — do not hand-edit (skills/SHARED.md)

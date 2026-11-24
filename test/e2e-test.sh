@@ -54,7 +54,7 @@ build() {
     make build-local >/dev/null 2>&1 || fail "Build failed"
 
     # Find binary
-    BINARY=$(ls bin/opik-logger-* 2>/dev/null | head -1)
+    BINARY=$(ls bin/opik-logger-* 2>/dev/null | grep -v '\.gz$' | head -1)
     if [[ ! -x "$BINARY" ]]; then
         fail "Binary not found after build"
     fi

@@ -17,3 +17,6 @@ Thumbs.db
 
 src/src
 .venv/
+
+bin/opik-logger-*
+!bin/opik-logger-*.gz
