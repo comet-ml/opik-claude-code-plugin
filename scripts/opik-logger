@@ -1,8 +1,22 @@
 #!/bin/bash
 # Wrapper script that selects the correct binary for the current platform
-DIR="$(dirname "$0")/../bin"
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
 ARCH=$(uname -m)
 [[ "$ARCH" == "x86_64" ]] && ARCH="amd64"
 [[ "$ARCH" == "aarch64" ]] && ARCH="arm64"
-exec "$DIR/opik-logger-${OS}-${ARCH}" "$@"
+NAME="opik-logger-${OS}-${ARCH}"
+BIN="$ROOT/bin/$NAME"
+if [[ ! -x "$BIN" ]]; then
+    CACHE="${CLAUDE_PLUGIN_DATA:-${XDG_CACHE_HOME:-$HOME/.cache}/opik-claude-code-plugin}/bin"
+    BIN="$CACHE/$NAME"
+    if [[ ! -x "$BIN" || "$ROOT/bin/$NAME.gz" -nt "$BIN" ]]; then
+        mkdir -p "$CACHE" || exit 1
+        TMP="$BIN.$$"
+        if ! { gzip -dc "$ROOT/bin/$NAME.gz" > "$TMP" && chmod +x "$TMP" && mv -f "$TMP" "$BIN"; }; then
+            rm -f "$TMP"
+            exit 1
+        fi
+    fi
+fi
+exec "$BIN" "$@"

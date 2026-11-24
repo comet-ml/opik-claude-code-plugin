@@ -74,7 +74,7 @@ jobs:
           name: ${{ inputs.version }}
           generate_release_notes: true
           files: |
-            bin/opik-logger-darwin-arm64
-            bin/opik-logger-darwin-amd64
-            bin/opik-logger-linux-amd64
-            bin/opik-logger-windows-amd64.exe
+            bin/opik-logger-darwin-arm64.gz
+            bin/opik-logger-darwin-amd64.gz
+            bin/opik-logger-linux-amd64.gz
+            bin/opik-logger-windows-amd64.exe.gz

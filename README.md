@@ -217,7 +217,7 @@ opik-claude-code-plugin/
 ├── scripts/
 │   └── opik-logger         # Platform selector script
 ├── bin/
-│   └── opik-logger-*       # Compiled binaries (darwin/linux, amd64/arm64)
+│   └── opik-logger-*.gz    # Gzipped binaries, unpacked on first run
 ├── src/
 │   └── *.go                # Go source code
 ├── skills/                 # Opik skill pack, vendored from comet-ml/opik-mcp (see skills/SHARED.md)
